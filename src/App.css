@@ -1,681 +1,184 @@
-import React, { useState, useMemo } from 'react';
-import {
-  Home,
-  ReceiptText,
-  PieChart,
-  Settings,
-  Share,
-  Plus,
-  ArrowLeftRight,
-  Car,
-  Smartphone,
-  Fuel,
-  Utensils,
-  Sparkles,
-  Wallet,
-  CreditCard,
-  CheckCircle2,
-  X,
-} from 'lucide-react';
+.counter {
+  font-size: 16px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 2px solid transparent;
+  transition: border-color 0.3s;
+  margin-bottom: 24px;
 
-const formatCOP = (value) =>
-  new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    maximumFractionDigits: 0,
-  }).format(value);
+  &:hover {
+    border-color: var(--accent-border);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState('resumen');
+.hero {
+  position: relative;
 
-  // Saldos iniciales por cuenta
-  const [accounts, setAccounts] = useState({
-    Efectivo: 350000,
-    Nequi: 820000,
-    Bancolombia: 1450000,
-  });
+  .base,
+  .framework,
+  .vite {
+    inset-inline: 0;
+    margin: 0 auto;
+  }
 
-  // Deudas activas (al llegar a 0 se eliminan)
-  const [debts, setDebts] = useState([
-    { id: 1, name: 'Tarjeta de Crédito', total: 1200000, remaining: 450000 },
-    { id: 2, name: 'Repuesto / Mantenimiento', total: 300000, remaining: 120000 },
-  ]);
+  .base {
+    width: 170px;
+    position: relative;
+    z-index: 0;
+  }
 
-  // Historial de movimientos del ciclo
-  const [transactions, setTransactions] = useState([
-    {
-      id: 101,
-      type: 'ingreso',
-      category: 'InDrive',
-      subType: 'Carreras',
-      amount: 165000,
-      account: 'Efectivo',
-      note: 'Jornada tarde',
-      date: 'Hoy',
-    },
-    {
-      id: 102,
-      type: 'gasto',
-      category: 'Gasolina',
-      subType: 'Tanqueo',
-      amount: 45000,
-      account: 'Efectivo',
-      note: 'Estación Terpel',
-      date: 'Hoy',
-    },
-    {
-      id: 103,
-      type: 'ingreso',
-      category: 'Celulares',
-      subType: 'Venta',
-      amount: 420000,
-      account: 'Nequi',
-      note: 'Ganancia venta equipo',
-      date: 'Ayer',
-    },
-    {
-      id: 104,
-      type: 'gasto',
-      category: 'Comida',
-      subType: 'Almuerzo',
-      amount: 18000,
-      account: 'Nequi',
-      note: 'Corrientazo',
-      date: 'Ayer',
-    },
-  ]);
+  .framework,
+  .vite {
+    position: absolute;
+  }
 
-  // Modales
-  const [showMoveModal, setShowMoveModal] = useState(false);
-  const [showTransferModal, setShowTransferModal] = useState(false);
-  const [abonoTarget, setAbonoTarget] = useState(null);
-  const [abonoAmount, setAbonoAmount] = useState('');
-  const [abonoAccount, setAbonoAccount] = useState('Nequi');
+  .framework {
+    z-index: 1;
+    top: 34px;
+    height: 28px;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
+      scale(1.4);
+  }
 
-  // Formulario nuevo movimiento
-  const [moveType, setMoveType] = useState('ingreso');
-  const [moveCategory, setMoveCategory] = useState('InDrive');
-  const [moveAmount, setMoveAmount] = useState('');
-  const [moveAccount, setMoveAccount] = useState('Efectivo');
-  const [moveNote, setMoveNote] = useState('');
+  .vite {
+    z-index: 0;
+    top: 107px;
+    height: 26px;
+    width: auto;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
+      scale(0.8);
+  }
+}
 
-  // Formulario transferencia
-  const [fromAcc, setFromAcc] = useState('Bancolombia');
-  const [toAcc, setToAcc] = useState('Nequi');
-  const [transferAmount, setTransferAmount] = useState('');
+#center {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  place-content: center;
+  place-items: center;
+  flex-grow: 1;
 
-  const totalBalance = useMemo(
-    () => Object.values(accounts).reduce((sum, val) => sum + val, 0),
-    [accounts]
-  );
+  @media (max-width: 1024px) {
+    padding: 32px 20px 24px;
+    gap: 18px;
+  }
+}
 
-  const totalDebt = useMemo(
-    () => debts.reduce((sum, d) => sum + d.remaining, 0),
-    [debts]
-  );
+#next-steps {
+  display: flex;
+  border-top: 1px solid var(--border);
+  text-align: left;
 
-  const { totalIncome, totalExpense, netProfit } = useMemo(() => {
-    const inc = transactions
-      .filter((t) => t.type === 'ingreso')
-      .reduce((s, t) => s + t.amount, 0);
-    const exp = transactions
-      .filter((t) => t.type === 'gasto')
-      .reduce((s, t) => s + t.amount, 0);
-    return { totalIncome: inc, totalExpense: exp, netProfit: inc - exp };
-  }, [transactions]);
-
-  const handleAddMovement = (e) => {
-    e.preventDefault();
-    const numeric = Number(moveAmount);
-    if (!numeric || numeric <= 0) return;
-
-    const newTx = {
-      id: Date.now(),
-      type: moveType,
-      category: moveCategory,
-      subType: moveNote || moveCategory,
-      amount: numeric,
-      account: moveAccount,
-      note: moveNote || 'Registro rápido',
-      date: 'Ahora',
-    };
-
-    setTransactions([newTx, ...transactions]);
-    setAccounts((prev) => ({
-      ...prev,
-      [moveAccount]:
-        moveType === 'ingreso'
-          ? prev[moveAccount] + numeric
-          : Math.max(0, prev[moveAccount] - numeric),
-    }));
-
-    setMoveAmount('');
-    setMoveNote('');
-    setShowMoveModal(false);
-  };
-
-  const handleTransfer = (e) => {
-    e.preventDefault();
-    const numeric = Number(transferAmount);
-    if (!numeric || numeric <= 0 || fromAcc === toAcc) return;
-
-    setAccounts((prev) => ({
-      ...prev,
-      [fromAcc]: Math.max(0, prev[fromAcc] - numeric),
-      [toAcc]: prev[toAcc] + numeric,
-    }));
-
-    setTransactions([
-      {
-        id: Date.now(),
-        type: 'transferencia',
-        category: 'Transferencia',
-        subType: `${fromAcc} → ${toAcc}`,
-        amount: numeric,
-        account: toAcc,
-        note: `Paso de ${fromAcc} a ${toAcc}`,
-        date: 'Ahora',
-      },
-      ...transactions,
-    ]);
-
-    setTransferAmount('');
-    setShowTransferModal(false);
-  };
-
-  const handleAbono = (e) => {
-    e.preventDefault();
-    const numeric = Number(abonoAmount);
-    if (!numeric || numeric <= 0 || !abonoTarget) return;
-
-    const actualPay = Math.min(numeric, abonoTarget.remaining);
-
-    setAccounts((prev) => ({
-      ...prev,
-      [abonoAccount]: Math.max(0, prev[abonoAccount] - actualPay),
-    }));
-
-    setDebts((prev) =>
-      prev
-        .map((d) =>
-          d.id === abonoTarget.id
-            ? { ...d, remaining: d.remaining - actualPay }
-            : d
-        )
-        .filter((d) => d.remaining > 0)
-    );
-
-    setTransactions([
-      {
-        id: Date.now(),
-        type: 'gasto',
-        category: 'Deudas',
-        subType: abonoTarget.name,
-        amount: actualPay,
-        account: abonoAccount,
-        note: `Abono a ${abonoTarget.name}`,
-        date: 'Ahora',
-      },
-      ...transactions,
-    ]);
-
-    setAbonoAmount('');
-    setAbonoTarget(null);
-  };
-
-  const getCategoryIcon = (cat) => {
-    switch (cat) {
-      case 'InDrive':
-        return <Car className="w-5 h-5 text-black" />;
-      case 'Celulares':
-        return <Smartphone className="w-5 h-5 text-black" />;
-      case 'Gasolina':
-        return <Fuel className="w-5 h-5 text-black" />;
-      case 'Comida':
-        return <Utensils className="w-5 h-5 text-black" />;
-      case 'Transferencia':
-        return <ArrowLeftRight className="w-5 h-5 text-blue-600" />;
-      default:
-        return <Sparkles className="w-5 h-5 text-black" />;
+  & > div {
+    flex: 1 1 0;
+    padding: 32px;
+    @media (max-width: 1024px) {
+      padding: 24px 20px;
     }
-  };
+  }
 
-  return (
-    <div className="min-h-screen bg-[#F6F6F6] text-black font-sans flex justify-center">
-      {/* Contenedor estilo app móvil */}
-      <div className="w-full max-w-md bg-[#F6F6F6] min-h-screen flex flex-col pb-24">
-        {/* Header superior */}
-        <header className="px-5 pt-6 pb-3 flex items-center justify-between bg-[#F6F6F6] sticky top-0 z-10">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight">artPay</h1>
-            <p className="text-xs text-neutral-500 font-medium">
-              Ciclo actual • Corte día 12
-            </p>
-          </div>
-          <button
-            onClick={() => setShowTransferModal(true)}
-            className="flex items-center gap-1.5 bg-white border border-neutral-200 px-3.5 py-2 rounded-full text-xs font-semibold shadow-xs active:scale-95 transition"
-          >
-            <ArrowLeftRight className="w-3.5 h-3.5" />
-            Transferir
-          </button>
-        </header>
+  .icon {
+    margin-bottom: 16px;
+    width: 22px;
+    height: 22px;
+  }
 
-        {/* CONTENIDO SEGÚN PESTAÑA */}
-        {activeTab === 'resumen' && (
-          <main className="px-5 space-y-4">
-            {/* Tarjeta Balance Total */}
-            <section className="bg-white rounded-2xl p-5 shadow-xs border border-neutral-100">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                  Plata disponible total
-                </span>
-                <Wallet className="w-4 h-4 text-neutral-400" />
-              </div>
-              <div className="text-3xl font-extrabold tracking-tight my-1">
-                {formatCOP(totalBalance)}
-              </div>
+  @media (max-width: 1024px) {
+    flex-direction: column;
+    text-align: center;
+  }
+}
 
-              <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-neutral-100">
-                {Object.entries(accounts).map(([accName, value]) => (
-                  <div key={accName} className="bg-neutral-50 rounded-xl p-2.5">
-                    <p className="text-[11px] text-neutral-500 font-medium">
-                      {accName}
-                    </p>
-                    <p className="text-xs font-bold mt-0.5 truncate">
-                      {formatCOP(value)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
+#docs {
+  border-right: 1px solid var(--border);
 
-            {/* Control de Deudas */}
-            <section className="bg-white rounded-2xl p-5 shadow-xs border border-neutral-100">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h2 className="text-base font-bold">Deudas activas</h2>
-                  <p className="text-xs text-neutral-500">
-                    Total pendiente: {formatCOP(totalDebt)}
-                  </p>
-                </div>
-                <CreditCard className="w-4 h-4 text-neutral-400" />
-              </div>
+  @media (max-width: 1024px) {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
 
-              {debts.length === 0 ? (
-                <div className="flex items-center gap-2 text-sm text-emerald-600 font-medium py-2">
-                  <CheckCircle2 className="w-4 h-4" />
-                  ¡Sin deudas pendientes!
-                </div>
-              ) : (
-                <div className="space-y-3.5">
-                  {debts.map((debt) => {
-                    const paidPercent = Math.round(
-                      ((debt.total - debt.remaining) / debt.total) * 100
-                    );
-                    return (
-                      <div
-                        key={debt.id}
-                        className="p-3 rounded-xl bg-neutral-50 border border-neutral-100"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-bold">{debt.name}</p>
-                            <p className="text-xs text-neutral-600 mt-0.5">
-                              Falta{' '}
-                              <span className="font-bold text-black">
-                                {formatCOP(debt.remaining)}
-                              </span>{' '}
-                              de {formatCOP(debt.total)}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => setAbonoTarget(debt)}
-                            className="bg-black text-white text-xs font-semibold px-3 py-1.5 rounded-full active:scale-95 transition"
-                          >
-                            Abonar
-                          </button>
-                        </div>
-                        <div className="w-full h-2 bg-neutral-200 rounded-full mt-2.5 overflow-hidden">
-                          <div
-                            className="h-full bg-emerald-600 rounded-full transition-all"
-                            style={{ width: `${paidPercent}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+#next-steps ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  margin: 32px 0 0;
 
-            {/* Resumen del Ciclo */}
-            <section className="bg-white rounded-2xl p-5 shadow-xs border border-neutral-100">
-              <h2 className="text-base font-bold mb-3">Balance del ciclo</h2>
-              <div className="space-y-2.5 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-neutral-600">Ingresos totales</span>
-                  <span className="font-bold text-emerald-600">
-                    +{formatCOP(totalIncome)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-600">Gastos totales</span>
-                  <span className="font-bold text-rose-600">
-                    -{formatCOP(totalExpense)}
-                  </span>
-                </div>
-                <div className="pt-2.5 border-t border-neutral-100 flex justify-between text-base">
-                  <span className="font-bold">Ganancia neta</span>
-                  <span
-                    className={`font-extrabold ${
-                      netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                    }`}
-                  >
-                    {netProfit >= 0 ? '+' : ''}
-                    {formatCOP(netProfit)}
-                  </span>
-                </div>
-              </div>
-            </section>
+  .logo {
+    height: 18px;
+  }
 
-            {/* Botón Principal estilo Uber */}
-            <button
-              onClick={() => setShowMoveModal(true)}
-              className="w-full bg-black text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 text-base shadow-sm active:scale-[0.99] transition"
-            >
-              <Plus className="w-5 h-5" />
-              Registrar Movimiento
-            </button>
-          </main>
-        )}
+  a {
+    color: var(--text-h);
+    font-size: 16px;
+    border-radius: 6px;
+    background: var(--social-bg);
+    display: flex;
+    padding: 6px 12px;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    transition: box-shadow 0.3s;
 
-        {activeTab === 'historial' && (
-          <main className="px-5 space-y-3">
-            <h2 className="text-lg font-bold">Últimos movimientos</h2>
-            {transactions.map((tx) => (
-              <div
-                key={tx.id}
-                className="bg-white p-4 rounded-2xl border border-neutral-100 flex items-center justify-between"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center">
-                    {getCategoryIcon(tx.category)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold">{tx.category}</p>
-                    <p className="text-xs text-neutral-500">
-                      {tx.note} • {tx.account}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p
-                    className={`text-sm font-bold ${
-                      tx.type === 'ingreso'
-                        ? 'text-emerald-600'
-                        : tx.type === 'gasto'
-                        ? 'text-rose-600'
-                        : 'text-blue-600'
-                    }`}
-                  >
-                    {tx.type === 'ingreso'
-                      ? '+'
-                      : tx.type === 'gasto'
-                      ? '-'
-                      : ''}
-                    {formatCOP(tx.amount)}
-                  </p>
-                  <p className="text-[11px] text-neutral-400">{tx.date}</p>
-                </div>
-              </div>
-            ))}
-          </main>
-        )}
+    &:hover {
+      box-shadow: var(--shadow);
+    }
+    .button-icon {
+      height: 18px;
+      width: 18px;
+    }
+  }
 
-        {activeTab === 'categorias' && (
-          <main className="px-5 space-y-4">
-            <h2 className="text-lg font-bold">Categorías y Negocios</h2>
+  @media (max-width: 1024px) {
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
 
-            <div className="bg-white rounded-2xl p-4 border border-neutral-100 space-y-3">
-              <p className="text-xs font-bold uppercase text-neutral-400">
-                Ingresos y Negocios
-              </p>
-              {['InDrive', 'Celulares', 'Otros Ingresos'].map((cat) => {
-                const sum = transactions
-                  .filter((t) => t.type === 'ingreso' && t.category === cat)
-                  .reduce((s, t) => s + t.amount, 0);
-                return (
-                  <div
-                    key={cat}
-                    className="flex items-center justify-between py-2 border-b last:border-b-0 border-neutral-100"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-neutral-100 flex items-center justify-center">
-                        {getCategoryIcon(cat)}
-                      </div>
-                      <span className="text-sm font-bold">{cat}</span>
-                    </div>
-                    <span className="text-sm font-bold text-emerald-600">
-                      +{formatCOP(sum)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+    li {
+      flex: 1 1 calc(50% - 8px);
+    }
 
-            <div className="bg-white rounded-2xl p-4 border border-neutral-100 space-y-3">
-              <p className="text-xs font-bold uppercase text-neutral-400">
-                Gastos Operativos y Personales
-              </p>
-              {['Gasolina', 'Comida', 'Ocio', 'Recargas', 'Gastos Personales'].map(
-                (cat) => {
-                  const sum = transactions
-                    .filter((t) => t.type === 'gasto' && t.category === cat)
-                    .reduce((s, t) => s + t.amount, 0);
-                  return (
-                    <div
-                      key={cat}
-                      className="flex items-center justify-between py-2 border-b last:border-b-0 border-neutral-100"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-neutral-100 flex items-center justify-center">
-                          {getCategoryIcon(cat)}
-                        </div>
-                        <span className="text-sm font-bold">{cat}</span>
-                      </div>
-                      <span className="text-sm font-bold text-rose-600">
-                        -{formatCOP(sum)}
-                      </span>
-                    </div>
-                  );
-                }
-              )}
-            </div>
-          </main>
-        )}
+    a {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+  }
+}
 
-        {activeTab === 'exportar' && (
-          <main className="px-5 space-y-4">
-            <h2 className="text-lg font-bold">Cierre de ciclo y respaldo</h2>
-            <div className="bg-white rounded-2xl p-5 border border-neutral-100 space-y-3">
-              <p className="text-sm text-neutral-600">
-                Aquí podrás generar el reporte PDF del mes para enviarlo a tu
-                chat de WhatsApp y archivar los movimientos del ciclo anterior.
-              </p>
-              <button
-                onClick={() =>
-                  alert('En el siguiente paso conectaremos jsPDF para descargar el PDF real.')
-                }
-                className="w-full bg-black text-white font-bold py-3.5 rounded-xl text-sm"
-              >
-                Generar PDF del Ciclo
-              </button>
-            </div>
-          </main>
-        )}
+#spacer {
+  height: 88px;
+  border-top: 1px solid var(--border);
+  @media (max-width: 1024px) {
+    height: 48px;
+  }
+}
 
-        {/* BARRA DE NAVEGACIÓN INFERIOR */}
-        <nav className="fixed bottom-0 w-full max-w-md bg-white border-t border-neutral-200 px-4 py-2.5 flex justify-around items-center">
-          {[
-            { id: 'resumen', label: 'Resumen', icon: Home },
-            { id: 'historial', label: 'Historial', icon: ReceiptText },
-            { id: 'categorias', label: 'Categorías', icon: PieChart },
-            { id: 'exportar', label: 'Cierre PDF', icon: Share },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-col items-center gap-1 text-[11px] font-semibold ${
-                  active ? 'text-black' : 'text-neutral-400'
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
+.ticks {
+  position: relative;
+  width: 100%;
 
-        {/* MODAL: REGISTRAR MOVIMIENTO */}
-        {showMoveModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50">
-            <form
-              onSubmit={handleAddMovement}
-              className="bg-white w-full max-w-md rounded-t-3xl p-6 space-y-4"
-            >
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold">Nuevo movimiento</h3>
-                <button
-                  type="button"
-                  onClick={() => setShowMoveModal(false)}
-                  className="p-1.5 rounded-full bg-neutral-100"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: -4.5px;
+    border: 5px solid transparent;
+  }
 
-              <div className="grid grid-cols-2 gap-2 bg-neutral-100 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMoveType('ingreso');
-                    setMoveCategory('InDrive');
-                  }}
-                  className={`py-2 rounded-lg text-sm font-bold ${
-                    moveType === 'ingreso'
-                      ? 'bg-white text-emerald-600 shadow-xs'
-                      : 'text-neutral-500'
-                  }`}
-                >
-                  + Ingreso
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMoveType('gasto');
-                    setMoveCategory('Gasolina');
-                  }}
-                  className={`py-2 rounded-lg text-sm font-bold ${
-                    moveType === 'gasto'
-                      ? 'bg-white text-rose-600 shadow-xs'
-                      : 'text-neutral-500'
-                  }`}
-                >
-                  - Gasto
-                </button>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-neutral-500">
-                  Monto (COP)
-                </label>
-                <input
-                  type="number"
-                  required
-                  placeholder="Ej: 50000"
-                  value={moveAmount}
-                  onChange={(e) => setMoveAmount(e.target.value)}
-                  className="w-full mt-1 px-4 py-3 rounded-xl bg-neutral-100 text-lg font-bold outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-neutral-500">
-                    Categoría
-                  </label>
-                  <select
-                    value={moveCategory}
-                    onChange={(e) => setMoveCategory(e.target.value)}
-                    className="w-full mt-1 px-3 py-3 rounded-xl bg-neutral-100 text-sm font-semibold outline-none"
-                  >
-                    {moveType === 'ingreso' ? (
-                      <>
-                        <option value="InDrive">InDrive</option>
-                        <option value="Celulares">Celulares</option>
-                        <option value="Otros Ingresos">Otros Ingresos</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="Gasolina">Gasolina</option>
-                        <option value="Comida">Comida</option>
-                        <option value="Ocio">Ocio</option>
-                        <option value="Recargas">Recargas</option>
-                        <option value="Gastos Personales">
-                          Gastos Personales
-                        </option>
-                        <option value="Celulares">Celulares (Repuesto/Compra)</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-neutral-500">
-                    Cuenta
-                  </label>
-                  <select
-                    value={moveAccount}
-                    onChange={(e) => setMoveAccount(e.target.value)}
-                    className="w-full mt-1 px-3 py-3 rounded-xl bg-neutral-100 text-sm font-semibold outline-none"
-                  >
-                    <option value="Efectivo">Efectivo</option>
-                    <option value="Nequi">Nequi</option>
-                    <option value="Bancolombia">Bancolombia</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-neutral-500">
-                  Nota rápida (opcional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ej: Tanqueo, venta iPhone, almuerzo..."
-                  value={moveNote}
-                  onChange={(e) => setMoveNote(e.target.value)}
-                  className="w-full mt-1 px-4 py-2.5 rounded-xl bg-neutral-100 text-sm outline-none"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full bg-black text-white font-bold py-3.5 rounded-xl"
-              >
-                Guardar movimiento
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* MODAL: TRANSFERENCIA ENTRE CUENTAS */}
-        {showTransferModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50">
-            <form
-              onSubmit={handleTransfer}
-              className="bg-white w-full max-w-md rounded-t-3xl p-6
+  &::before {
+    left: 0;
+    border-left-color: var(--border);
+  }
+  &::after {
+    right: 0;
+    border-right-color: var(--border);
+  }
+}
