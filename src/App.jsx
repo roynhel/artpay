@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v2';
+const STORAGE_KEY = 'artpay_data_v3';
 
 const DEFAULT_DATA = {
   userName: '',
-  theme: 'dark',
+  theme: 'dark', // 'dark' | 'light' | 'system'
   accounts: [],
   categories: [],
   debts: [],
@@ -38,13 +38,39 @@ export default function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return { ...DEFAULT_DATA, ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_DATA,
+          ...parsed,
+          categories: Array.isArray(parsed.categories)
+            ? parsed.categories.map((c) => (typeof c === 'string' ? { id: c, name: c } : c))
+            : [],
+        };
       }
     } catch (e) {
       console.error(e);
     }
     return DEFAULT_DATA;
   });
+
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+      : true
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e) => setSystemPrefersDark(e.matches);
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    } else {
+      mq.addListener(onChange);
+      return () => mq.removeListener(onChange);
+    }
+  }, []);
 
   const [activeTab, setActiveTab] = useState('inicio'); // inicio | estadisticas | deseos | config
   const [hideBalances, setHideBalances] = useState(false);
@@ -54,23 +80,28 @@ export default function App() {
   const [txType, setTxType] = useState('gasto'); // ingreso | gasto
   const [txAmount, setTxAmount] = useState('');
   const [txAccount, setTxAccount] = useState('');
-  const [txCategory, setTxCategory] = useState('');
+  const [txCategoryName, setTxCategoryName] = useState('');
   const [txNote, setTxNote] = useState('');
 
   // Secciones minimizables en Configuración
   const [openSections, setOpenSections] = useState({
     perfil: true,
-    apariencia: false,
+    apariencia: true,
     cuentas: true,
     categorias: true,
     deudas: true,
+  });
+
+  // Secciones minimizables en Estadísticas
+  const [openStats, setOpenStats] = useState({
+    gastosCat: false,
+    ingresosCat: false,
   });
 
   // Inputs de Configuración
   const [newAccName, setNewAccName] = useState('');
   const [newAccBalance, setNewAccBalance] = useState('');
   const [newCatName, setNewCatName] = useState('');
-  const [newCatType, setNewCatType] = useState('gasto');
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
 
@@ -94,7 +125,7 @@ export default function App() {
     }
   }, [data]);
 
-  const isDark = data.theme === 'dark';
+  const isDark = data.theme === 'system' ? systemPrefersDark : data.theme === 'dark';
 
   // Cálculos financieros
   const totalAvailable = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
@@ -111,6 +142,10 @@ export default function App() {
 
   const toggleSection = (key) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const toggleStat = (key) => {
+    setOpenStats((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   // --- Cuentas ---
@@ -143,14 +178,13 @@ export default function App() {
     }));
   };
 
-  // --- Categorías ---
+  // --- Categorías (sin tipo fijo al crear) ---
   const handleAddCategory = (e) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
     const created = {
       id: Date.now().toString(),
       name: newCatName.trim(),
-      type: newCatType,
     };
     setData((prev) => ({ ...prev, categories: [...prev.categories, created] }));
     setNewCatName('');
@@ -204,7 +238,7 @@ export default function App() {
     setTxType('gasto');
     setTxAmount('');
     setTxAccount(data.accounts[0]?.id || '');
-    setTxCategory('');
+    setTxCategoryName('');
     setTxNote('');
     setShowTxModal(true);
   };
@@ -215,7 +249,6 @@ export default function App() {
     if (!amount || amount <= 0) return;
 
     const accountObj = data.accounts.find((a) => a.id === txAccount);
-    const categoryObj = data.categories.find((c) => c.id === txCategory);
 
     const newTx = {
       id: Date.now().toString(),
@@ -223,7 +256,7 @@ export default function App() {
       amount,
       accountId: accountObj?.id || '',
       accountName: accountObj?.name || 'Sin cuenta',
-      categoryName: categoryObj?.name || (txType === 'ingreso' ? 'Ingreso general' : 'Gasto general'),
+      categoryName: txCategoryName.trim() || 'General',
       note: txNote.trim(),
       date: new Date().toISOString(),
     };
@@ -323,19 +356,20 @@ export default function App() {
         bg: '#050608',
         headerBg: 'rgba(5, 6, 8, 0.88)',
         card: 'linear-gradient(180deg, #16191f 0%, #0b0d10 100%)',
+        availableCard: 'linear-gradient(180deg, #242934 0%, #13171e 100%)',
         cardSolid: '#0e1014',
         cardSubtle: '#13161c',
         border: 'rgba(255, 255, 255, 0.11)',
-        borderStrong: 'rgba(255, 255, 255, 0.22)',
+        borderStrong: 'rgba(255, 255, 255, 0.24)',
         textPrimary: '#FFFFFF',
         textSecondary: '#B6BDC8',
         textMuted: '#78808E',
-        silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #B8C0CC 100%)',
+        silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #C5CCD6 100%)',
         accentBlue: '#2563EB',
         accentBlueSoft: 'rgba(37, 99, 235, 0.16)',
         accentBlueText: '#60A5FA',
-        whiteCircleBg: '#FFFFFF',
-        whiteCircleIcon: '#060709',
+        iconCircleBg: '#1C222D',
+        iconCircleColor: '#E2E8F0',
         inputBg: '#090B0E',
         navBg: 'rgba(8, 10, 13, 0.94)',
         danger: '#F87171',
@@ -347,6 +381,7 @@ export default function App() {
         bg: '#F4F6F9',
         headerBg: 'rgba(244, 246, 249, 0.9)',
         card: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+        availableCard: 'linear-gradient(180deg, #FFFFFF 0%, #F1F5F9 100%)',
         cardSolid: '#FFFFFF',
         cardSubtle: '#EEF2F6',
         border: 'rgba(15, 23, 42, 0.09)',
@@ -358,8 +393,8 @@ export default function App() {
         accentBlue: '#2563EB',
         accentBlueSoft: 'rgba(37, 99, 235, 0.1)',
         accentBlueText: '#2563EB',
-        whiteCircleBg: '#0B0D11',
-        whiteCircleIcon: '#FFFFFF',
+        iconCircleBg: '#E2E8F0',
+        iconCircleColor: '#0F172A',
         inputBg: '#F8FAFC',
         navBg: 'rgba(255, 255, 255, 0.95)',
         danger: '#DC2626',
@@ -367,6 +402,19 @@ export default function App() {
         success: '#059669',
         successBg: 'rgba(5, 150, 105, 0.1)',
       };
+
+  const baseInputStyle = {
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
+    backgroundColor: theme.inputBg,
+    border: `1px solid ${theme.border}`,
+    borderRadius: '10px',
+    padding: '10px 11px',
+    color: theme.textPrimary,
+    fontSize: '13px',
+    outline: 'none',
+  };
 
   const renderMoney = (val) => (hideBalances ? '••••••' : formatCOP(val));
 
@@ -377,12 +425,51 @@ export default function App() {
       return acc;
     }, {});
 
-  const totalAllExpenses = Object.values(expenseByCategory).reduce((a, b) => a + b, 0);
-  const totalAllIncomes = data.transactions
+  const incomeByCategory = data.transactions
     .filter((t) => t.type === 'ingreso')
-    .reduce((a, b) => a + Number(b.amount), 0);
+    .reduce((acc, t) => {
+      acc[t.categoryName] = (acc[t.categoryName] || 0) + Number(t.amount);
+      return acc;
+    }, {});
+
+  const totalAllExpenses = Object.values(expenseByCategory).reduce((a, b) => a + b, 0);
+  const totalAllIncomes = Object.values(incomeByCategory).reduce((a, b) => a + b, 0);
+  const totalCompare = Math.max(totalAllIncomes + totalAllExpenses, 1);
 
   const totalWishesValue = data.wishes.reduce((acc, w) => acc + (Number(w.price) || 0), 0);
+
+  const getWishRankStyle = (idx) => {
+    if (idx === 0) {
+      return {
+        badgeBg: '#F59E0B',
+        badgeColor: '#090B0E',
+        cardBorder: 'rgba(245, 158, 11, 0.45)',
+        amountColor: '#FBBF24',
+      };
+    }
+    if (idx === 1) {
+      return {
+        badgeBg: '#CBD5E1',
+        badgeColor: '#090B0E',
+        cardBorder: 'rgba(203, 213, 225, 0.35)',
+        amountColor: '#E2E8F0',
+      };
+    }
+    if (idx === 2) {
+      return {
+        badgeBg: '#60A5FA',
+        badgeColor: '#090B0E',
+        cardBorder: 'rgba(96, 165, 250, 0.38)',
+        amountColor: theme.accentBlueText,
+      };
+    }
+    return {
+      badgeBg: theme.cardSubtle,
+      badgeColor: theme.textSecondary,
+      cardBorder: theme.border,
+      amountColor: theme.accentBlueText,
+    };
+  };
 
   return (
     <div
@@ -492,10 +579,10 @@ export default function App() {
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {/* Tarjeta Principal: Plata disponible con círculo blanco contrastado */}
+            {/* Tarjeta Principal: Plata disponible (más clara en modo negro sin fondo blanco) */}
             <section
               style={{
-                background: theme.card,
+                background: theme.availableCard,
                 border: `1px solid ${theme.borderStrong}`,
                 borderRadius: '20px',
                 padding: '20px',
@@ -509,15 +596,15 @@ export default function App() {
                       width: '36px',
                       height: '36px',
                       borderRadius: '50%',
-                      backgroundColor: theme.whiteCircleBg,
-                      color: theme.whiteCircleIcon,
+                      backgroundColor: theme.iconCircleBg,
+                      color: theme.iconCircleColor,
+                      border: `1px solid ${theme.borderStrong}`,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      boxShadow: isDark ? '0 0 16px rgba(255,255,255,0.22)' : 'none',
                     }}
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <rect x="2" y="5" width="20" height="14" rx="3" />
                       <line x1="2" y1="10" x2="22" y2="10" />
                     </svg>
@@ -789,97 +876,171 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Estadísticas</h2>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div
-                style={{
-                  background: theme.card,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '16px',
-                  padding: '16px',
-                }}
-              >
-                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>
-                  Total Ingresos
-                </div>
-                <div style={{ fontSize: '18px', fontWeight: 800, color: theme.success }}>
-                  {renderMoney(totalAllIncomes)}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  background: theme.card,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '16px',
-                  padding: '16px',
-                }}
-              >
-                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>
-                  Total Gastos
-                </div>
-                <div style={{ fontSize: '18px', fontWeight: 800, color: theme.danger }}>
-                  {renderMoney(totalAllExpenses)}
-                </div>
-              </div>
-            </div>
-
+            {/* Barras comparativas: Ingresos vs Gastos */}
             <section
               style={{
                 background: theme.card,
                 border: `1px solid ${theme.border}`,
                 borderRadius: '18px',
                 padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '14px',
               }}
             >
-              <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '12px' }}>
-                Gastos por categoría
+              <div style={{ fontSize: '14px', fontWeight: 700 }}>Ingresos vs Gastos</div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                  <span style={{ color: theme.textSecondary, fontWeight: 600 }}>Ingresos</span>
+                  <span style={{ color: theme.success, fontWeight: 700 }}>{renderMoney(totalAllIncomes)}</span>
+                </div>
+                <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.cardSubtle, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      width: `${Math.round((totalAllIncomes / totalCompare) * 100)}%`,
+                      height: '100%',
+                      backgroundColor: theme.success,
+                      borderRadius: '999px',
+                    }}
+                  />
+                </div>
               </div>
 
-              {Object.keys(expenseByCategory).length === 0 ? (
-                <div style={{ fontSize: '13px', color: theme.textMuted }}>
-                  Aún no tienes gastos registrados para mostrar porcentajes.
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                  <span style={{ color: theme.textSecondary, fontWeight: 600 }}>Gastos</span>
+                  <span style={{ color: theme.danger, fontWeight: 700 }}>{renderMoney(totalAllExpenses)}</span>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {Object.entries(expenseByCategory)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([cat, amt]) => {
-                      const pct = totalAllExpenses > 0 ? Math.round((amt / totalAllExpenses) * 100) : 0;
-                      return (
-                        <div key={cat}>
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              fontSize: '13px',
-                              marginBottom: '5px',
-                            }}
-                          >
-                            <span style={{ fontWeight: 600 }}>{cat}</span>
-                            <span style={{ color: theme.textSecondary }}>
-                              {renderMoney(amt)} ({pct}%)
-                            </span>
-                          </div>
-                          <div
-                            style={{
-                              height: '8px',
-                              borderRadius: '999px',
-                              backgroundColor: theme.cardSubtle,
-                              overflow: 'hidden',
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: `${pct}%`,
-                                height: '100%',
-                                backgroundColor: theme.accentBlue,
-                                borderRadius: '999px',
-                              }}
-                            />
-                          </div>
+                <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.cardSubtle, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      width: `${Math.round((totalAllExpenses / totalCompare) * 100)}%`,
+                      height: '100%',
+                      backgroundColor: theme.danger,
+                      borderRadius: '999px',
+                    }}
+                  />
+                </div>
+              </div>
+            </section>
+
+            {/* Minimizable: Gasto por categoría */}
+            <section
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '18px',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => toggleStat('gastosCat')}
+                style={{
+                  width: '100%',
+                  padding: '15px 16px',
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textPrimary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: '14px', fontWeight: 700 }}>Gasto por categoría</span>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  {openStats.gastosCat ? '▲' : '▼'}
+                </span>
+              </button>
+
+              {openStats.gastosCat && (
+                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {Object.keys(expenseByCategory).length === 0 ? (
+                    <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin gastos registrados aún.</div>
+                  ) : (
+                    Object.entries(expenseByCategory)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([cat, amt]) => (
+                        <div
+                          key={cat}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            backgroundColor: theme.cardSubtle,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '12px',
+                            padding: '10px 12px',
+                            fontSize: '13px',
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{cat}</span>
+                          <span style={{ fontWeight: 700, color: theme.danger }}>{renderMoney(amt)}</span>
                         </div>
-                      );
-                    })}
+                      ))
+                  )}
+                </div>
+              )}
+            </section>
+
+            {/* Minimizable: Ingresos por categoría */}
+            <section
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '18px',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => toggleStat('ingresosCat')}
+                style={{
+                  width: '100%',
+                  padding: '15px 16px',
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textPrimary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: '14px', fontWeight: 700 }}>Ingresos por categoría</span>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  {openStats.ingresosCat ? '▲' : '▼'}
+                </span>
+              </button>
+
+              {openStats.ingresosCat && (
+                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {Object.keys(incomeByCategory).length === 0 ? (
+                    <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin ingresos registrados aún.</div>
+                  ) : (
+                    Object.entries(incomeByCategory)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([cat, amt]) => (
+                        <div
+                          key={cat}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            backgroundColor: theme.cardSubtle,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '12px',
+                            padding: '10px 12px',
+                            fontSize: '13px',
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{cat}</span>
+                          <span style={{ fontWeight: 700, color: theme.success }}>{renderMoney(amt)}</span>
+                        </div>
+                      ))
+                  )}
                 </div>
               )}
             </section>
@@ -893,7 +1054,7 @@ export default function App() {
               <div>
                 <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Lista de Deseos</h2>
                 <p style={{ fontSize: '12px', color: theme.textSecondary, margin: '3px 0 0' }}>
-                  Ordena tus prioridades sin afectar tus cuentas
+                  Mantén presionado el agarre izquierdo para ordenar
                 </p>
               </div>
               {data.wishes.length > 0 && (
@@ -921,18 +1082,10 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '8px' }}>
                 <input
                   type="text"
-                  placeholder="Ej: Gafas oscuras"
+                  placeholder="Ej: Gafas"
                   value={wishName}
                   onChange={(e) => setWishName(e.target.value)}
-                  style={{
-                    backgroundColor: theme.inputBg,
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '12px',
-                    padding: '11px 12px',
-                    color: theme.textPrimary,
-                    fontSize: '14px',
-                    outline: 'none',
-                  }}
+                  style={baseInputStyle}
                 />
                 <input
                   type="text"
@@ -940,15 +1093,7 @@ export default function App() {
                   placeholder="Ej: 180.000"
                   value={wishPrice}
                   onChange={(e) => setWishPrice(formatMoneyInput(e.target.value))}
-                  style={{
-                    backgroundColor: theme.inputBg,
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '12px',
-                    padding: '11px 12px',
-                    color: theme.textPrimary,
-                    fontSize: '14px',
-                    outline: 'none',
-                  }}
+                  style={baseInputStyle}
                 />
               </div>
 
@@ -966,7 +1111,7 @@ export default function App() {
                   cursor: 'pointer',
                 }}
               >
-                + Agregar a mi lista
+                + Agregar deseo
               </button>
             </form>
 
@@ -982,163 +1127,163 @@ export default function App() {
                   fontSize: '13px',
                 }}
               >
-                Tu lista de deseos está vacía. Agrega algo que quieras comprar arriba y ordénalo por prioridad.
+                Agrega un deseo y su valor para organizar tus prioridades.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {data.wishes.map((wish, idx) => (
-                  <div
-                    key={wish.id}
-                    draggable
-                    onDragStart={() => setDragIndex(idx)}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setDragOverIndex(idx);
-                    }}
-                    onDrop={() => {
-                      reorderWishes(dragIndex, idx);
-                      setDragIndex(null);
-                      setDragOverIndex(null);
-                    }}
-                    onDragEnd={() => {
-                      setDragIndex(null);
-                      setDragOverIndex(null);
-                    }}
-                    style={{
-                      background: theme.card,
-                      border:
-                        dragOverIndex === idx
-                          ? `1.5px solid ${theme.accentBlue}`
-                          : `1px solid ${theme.border}`,
-                      borderRadius: '15px',
-                      padding: '12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '10px',
-                      opacity: dragIndex === idx ? 0.72 : 1,
-                      transition: 'border-color 0.15s ease',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                      <div
-                        onTouchStart={(e) => handleTouchStartGrip(idx, e)}
-                        onTouchMove={handleTouchMoveGrip}
-                        onTouchEnd={handleTouchEndGrip}
-                        title="Mantén presionado y arrastra para mover"
-                        style={{
-                          width: '28px',
-                          height: '38px',
-                          borderRadius: '8px',
-                          backgroundColor: theme.cardSubtle,
-                          color: theme.textSecondary,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'grab',
-                          touchAction: 'none',
-                          userSelect: 'none',
-                          flexShrink: 0,
-                          fontSize: '15px',
-                        }}
-                      >
-                        ⋮⋮
-                      </div>
-
-                      <div
-                        style={{
-                          width: '24px',
-                          height: '24px',
-                          borderRadius: '50%',
-                          backgroundColor: idx === 0 ? theme.whiteCircleBg : theme.cardSubtle,
-                          color: idx === 0 ? theme.whiteCircleIcon : theme.textSecondary,
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {idx + 1}
-                      </div>
-
-                      <div style={{ minWidth: 0 }}>
+                {data.wishes.map((wish, idx) => {
+                  const rankStyle = getWishRankStyle(idx);
+                  return (
+                    <div
+                      key={wish.id}
+                      draggable
+                      onDragStart={() => setDragIndex(idx)}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragOverIndex(idx);
+                      }}
+                      onDrop={() => {
+                        reorderWishes(dragIndex, idx);
+                        setDragIndex(null);
+                        setDragOverIndex(null);
+                      }}
+                      onDragEnd={() => {
+                        setDragIndex(null);
+                        setDragOverIndex(null);
+                      }}
+                      style={{
+                        background: theme.card,
+                        border:
+                          dragOverIndex === idx
+                            ? `1.5px solid ${theme.accentBlue}`
+                            : `1px solid ${rankStyle.cardBorder}`,
+                        borderRadius: '15px',
+                        padding: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '10px',
+                        opacity: dragIndex === idx ? 0.72 : 1,
+                        transition: 'border-color 0.15s ease',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                         <div
+                          onTouchStart={(e) => handleTouchStartGrip(idx, e)}
+                          onTouchMove={handleTouchMoveGrip}
+                          onTouchEnd={handleTouchEndGrip}
+                          title="Mantén presionado y arrastra"
                           style={{
-                            fontSize: '14px',
-                            fontWeight: 700,
-                            color: theme.textPrimary,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
+                            width: '28px',
+                            height: '38px',
+                            borderRadius: '8px',
+                            backgroundColor: theme.cardSubtle,
+                            color: theme.textSecondary,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'grab',
+                            touchAction: 'none',
+                            userSelect: 'none',
+                            flexShrink: 0,
+                            fontSize: '15px',
                           }}
                         >
-                          {wish.name}
+                          ⋮⋮
                         </div>
-                        <div style={{ fontSize: '13px', fontWeight: 600, color: theme.accentBlueText }}>
-                          {renderMoney(wish.price)}
+
+                        <div
+                          style={{
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '50%',
+                            backgroundColor: rankStyle.badgeBg,
+                            color: rankStyle.badgeColor,
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {idx + 1}
+                        </div>
+
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: '14px',
+                              fontWeight: 700,
+                              color: theme.textPrimary,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {wish.name}
+                          </div>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: rankStyle.amountColor }}>
+                            {renderMoney(wish.price)}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        onClick={() => reorderWishes(idx, idx - 1)}
-                        title="Subir prioridad"
-                        style={{
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '8px',
-                          border: `1px solid ${theme.border}`,
-                          backgroundColor: theme.cardSubtle,
-                          color: idx === 0 ? theme.textMuted : theme.textPrimary,
-                          opacity: idx === 0 ? 0.4 : 1,
-                          cursor: idx === 0 ? 'default' : 'pointer',
-                        }}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === data.wishes.length - 1}
-                        onClick={() => reorderWishes(idx, idx + 1)}
-                        title="Bajar prioridad"
-                        style={{
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '8px',
-                          border: `1px solid ${theme.border}`,
-                          backgroundColor: theme.cardSubtle,
-                          color: idx === data.wishes.length - 1 ? theme.textMuted : theme.textPrimary,
-                          opacity: idx === data.wishes.length - 1 ? 0.4 : 1,
-                          cursor: idx === data.wishes.length - 1 ? 'default' : 'pointer',
-                        }}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteWish(wish.id)}
-                        title="Eliminar deseo"
-                        style={{
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          backgroundColor: theme.dangerBg,
-                          color: theme.danger,
-                          cursor: 'pointer',
-                          marginLeft: '2px',
-                        }}
-                      >
-                        ✕
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => reorderWishes(idx, idx - 1)}
+                          style={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '8px',
+                            border: `1px solid ${theme.border}`,
+                            backgroundColor: theme.cardSubtle,
+                            color: idx === 0 ? theme.textMuted : theme.textPrimary,
+                            opacity: idx === 0 ? 0.4 : 1,
+                            cursor: idx === 0 ? 'default' : 'pointer',
+                          }}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === data.wishes.length - 1}
+                          onClick={() => reorderWishes(idx, idx + 1)}
+                          style={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '8px',
+                            border: `1px solid ${theme.border}`,
+                            backgroundColor: theme.cardSubtle,
+                            color: idx === data.wishes.length - 1 ? theme.textMuted : theme.textPrimary,
+                            opacity: idx === data.wishes.length - 1 ? 0.4 : 1,
+                            cursor: idx === data.wishes.length - 1 ? 'default' : 'pointer',
+                          }}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteWish(wish.id)}
+                          style={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '8px',
+                            border: 'none',
+                            backgroundColor: theme.dangerBg,
+                            color: theme.danger,
+                            cursor: 'pointer',
+                            marginLeft: '2px',
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1187,21 +1332,13 @@ export default function App() {
                     placeholder="Ej: Roynhel"
                     value={data.userName}
                     onChange={(e) => setData((prev) => ({ ...prev, userName: e.target.value }))}
-                    style={{
-                      backgroundColor: theme.inputBg,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '12px',
-                      padding: '11px 12px',
-                      color: theme.textPrimary,
-                      fontSize: '14px',
-                      outline: 'none',
-                    }}
+                    style={baseInputStyle}
                   />
                 </div>
               )}
             </section>
 
-            {/* 2. APARIENCIA */}
+            {/* 2. APARIENCIA (Negro / Claro / Sistema) */}
             <section
               style={{
                 background: theme.card,
@@ -1232,39 +1369,33 @@ export default function App() {
               </button>
 
               {openSections.apariencia && (
-                <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setData((prev) => ({ ...prev, theme: 'dark' }))}
-                    style={{
-                      padding: '11px',
-                      borderRadius: '12px',
-                      border: isDark ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
-                      backgroundColor: isDark ? theme.accentBlueSoft : theme.cardSubtle,
-                      color: theme.textPrimary,
-                      fontWeight: 700,
-                      fontSize: '13px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Negro / Plateado
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setData((prev) => ({ ...prev, theme: 'light' }))}
-                    style={{
-                      padding: '11px',
-                      borderRadius: '12px',
-                      border: !isDark ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
-                      backgroundColor: !isDark ? theme.accentBlueSoft : theme.cardSubtle,
-                      color: theme.textPrimary,
-                      fontWeight: 700,
-                      fontSize: '13px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Modo Claro
-                  </button>
+                <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                  {[
+                    { id: 'dark', label: 'Negro' },
+                    { id: 'light', label: 'Claro' },
+                    { id: 'system', label: 'Sistema' },
+                  ].map((opt) => {
+                    const selected = data.theme === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setData((prev) => ({ ...prev, theme: opt.id }))}
+                        style={{
+                          padding: '10px 8px',
+                          borderRadius: '12px',
+                          border: selected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                          backgroundColor: selected ? theme.accentBlueSoft : theme.cardSubtle,
+                          color: selected ? theme.accentBlueText : theme.textPrimary,
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -1313,8 +1444,7 @@ export default function App() {
                         borderRadius: '10px',
                       }}
                     >
-                      Aún no tienes cuentas. Agrega una abajo (por ejemplo: <strong>Nequi</strong> con saldo{' '}
-                      <strong>50.000</strong> o <strong>Efectivo</strong>).
+                      Agrega una cuenta abajo (Ej: <strong>Nequi</strong> y <strong>50.000</strong>).
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1332,15 +1462,19 @@ export default function App() {
                             gap: '8px',
                           }}
                         >
-                          <span style={{ fontSize: '14px', fontWeight: 600 }}>{acc.name}</span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '14px', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {acc.name}
+                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                             <input
                               type="text"
                               inputMode="numeric"
                               value={Number(acc.balance).toLocaleString('es-CO')}
                               onChange={(e) => handleUpdateAccountBalance(acc.id, e.target.value)}
                               style={{
-                                width: '110px',
+                                width: '104px',
+                                minWidth: 0,
+                                boxSizing: 'border-box',
                                 textAlign: 'right',
                                 backgroundColor: theme.inputBg,
                                 border: `1px solid ${theme.border}`,
@@ -1372,20 +1506,13 @@ export default function App() {
                   )}
 
                   <form onSubmit={handleAddAccount} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '8px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
                       <input
                         type="text"
-                        placeholder="Ej: Nequi / Efectivo"
+                        placeholder="Ej: Nequi"
                         value={newAccName}
                         onChange={(e) => setNewAccName(e.target.value)}
-                        style={{
-                          backgroundColor: theme.inputBg,
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '10px',
-                          padding: '10px',
-                          color: theme.textPrimary,
-                          fontSize: '13px',
-                        }}
+                        style={baseInputStyle}
                       />
                       <input
                         type="text"
@@ -1393,19 +1520,13 @@ export default function App() {
                         placeholder="Ej: 50.000"
                         value={newAccBalance}
                         onChange={(e) => setNewAccBalance(formatMoneyInput(e.target.value))}
-                        style={{
-                          backgroundColor: theme.inputBg,
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '10px',
-                          padding: '10px',
-                          color: theme.textPrimary,
-                          fontSize: '13px',
-                        }}
+                        style={baseInputStyle}
                       />
                     </div>
                     <button
                       type="submit"
                       style={{
+                        width: '100%',
                         padding: '10px',
                         borderRadius: '10px',
                         border: 'none',
@@ -1423,7 +1544,7 @@ export default function App() {
               )}
             </section>
 
-            {/* 4. CATEGORÍAS */}
+            {/* 4. CATEGORÍAS (Solo nombre, sin tipo fijo al crear) */}
             <section
               style={{
                 background: theme.card,
@@ -1467,8 +1588,7 @@ export default function App() {
                         borderRadius: '10px',
                       }}
                     >
-                      Aún no tienes categorías. Crea las tuyas abajo (por ejemplo: <strong>Comida</strong> o{' '}
-                      <strong>Trabajo</strong>).
+                      Agrega categorías abajo (Ej: <strong>Comida</strong>). Tú eliges si es ingreso o gasto al registrar.
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -1486,14 +1606,6 @@ export default function App() {
                             fontSize: '13px',
                           }}
                         >
-                          <span
-                            style={{
-                              width: '7px',
-                              height: '7px',
-                              borderRadius: '50%',
-                              backgroundColor: cat.type === 'ingreso' ? theme.success : theme.danger,
-                            }}
-                          />
                           <span>{cat.name}</span>
                           <button
                             type="button"
@@ -1534,42 +1646,18 @@ export default function App() {
                     </div>
                   )}
 
-                  <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '8px' }}>
-                      <input
-                        type="text"
-                        placeholder="Ej: Comida / Transporte"
-                        value={newCatName}
-                        onChange={(e) => setNewCatName(e.target.value)}
-                        style={{
-                          backgroundColor: theme.inputBg,
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '10px',
-                          padding: '10px',
-                          color: theme.textPrimary,
-                          fontSize: '13px',
-                        }}
-                      />
-                      <select
-                        value={newCatType}
-                        onChange={(e) => setNewCatType(e.target.value)}
-                        style={{
-                          backgroundColor: theme.inputBg,
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '10px',
-                          padding: '10px',
-                          color: theme.textPrimary,
-                          fontSize: '13px',
-                        }}
-                      >
-                        <option value="gasto">Gasto</option>
-                        <option value="ingreso">Ingreso</option>
-                      </select>
-                    </div>
+                  <form onSubmit={handleAddCategory} style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      type="text"
+                      placeholder="Ej: Comida"
+                      value={newCatName}
+                      onChange={(e) => setNewCatName(e.target.value)}
+                      style={{ ...baseInputStyle, flex: 1 }}
+                    />
                     <button
                       type="submit"
                       style={{
-                        padding: '10px',
+                        padding: '10px 14px',
                         borderRadius: '10px',
                         border: 'none',
                         backgroundColor: theme.accentBlue,
@@ -1577,9 +1665,10 @@ export default function App() {
                         fontSize: '13px',
                         fontWeight: 700,
                         cursor: 'pointer',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      + Agregar categoría
+                      + Agregar
                     </button>
                   </form>
                 </div>
@@ -1628,8 +1717,7 @@ export default function App() {
                         borderRadius: '10px',
                       }}
                     >
-                      No tienes deudas registradas (por ejemplo: <strong>Tarjeta</strong> por{' '}
-                      <strong>200.000</strong>).
+                      Agrega una deuda abajo (Ej: <strong>Tarjeta</strong> y <strong>200.000</strong>).
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1671,20 +1759,13 @@ export default function App() {
                   )}
 
                   <form onSubmit={handleAddDebt} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '8px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
                       <input
                         type="text"
-                        placeholder="Ej: Tarjeta / Préstamo"
+                        placeholder="Ej: Tarjeta"
                         value={newDebtName}
                         onChange={(e) => setNewDebtName(e.target.value)}
-                        style={{
-                          backgroundColor: theme.inputBg,
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '10px',
-                          padding: '10px',
-                          color: theme.textPrimary,
-                          fontSize: '13px',
-                        }}
+                        style={baseInputStyle}
                       />
                       <input
                         type="text"
@@ -1692,19 +1773,13 @@ export default function App() {
                         placeholder="Ej: 200.000"
                         value={newDebtAmount}
                         onChange={(e) => setNewDebtAmount(formatMoneyInput(e.target.value))}
-                        style={{
-                          backgroundColor: theme.inputBg,
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '10px',
-                          padding: '10px',
-                          color: theme.textPrimary,
-                          fontSize: '13px',
-                        }}
+                        style={baseInputStyle}
                       />
                     </div>
                     <button
                       type="submit"
                       style={{
+                        width: '100%',
                         padding: '10px',
                         borderRadius: '10px',
                         border: 'none',
@@ -1750,6 +1825,7 @@ export default function App() {
               display: 'flex',
               flexDirection: 'column',
               gap: '12px',
+              boxSizing: 'border-box',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1809,30 +1885,16 @@ export default function App() {
               value={txAmount}
               onChange={(e) => setTxAmount(formatMoneyInput(e.target.value))}
               required
-              style={{
-                backgroundColor: theme.inputBg,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '12px',
-                padding: '12px',
-                color: theme.textPrimary,
-                fontSize: '16px',
-                fontWeight: 700,
-              }}
+              style={{ ...baseInputStyle, fontSize: '16px', fontWeight: 700, padding: '12px' }}
             />
 
+            {/* Selección de cuenta */}
             <select
               value={txAccount}
               onChange={(e) => setTxAccount(e.target.value)}
-              style={{
-                backgroundColor: theme.inputBg,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '12px',
-                padding: '12px',
-                color: theme.textPrimary,
-                fontSize: '14px',
-              }}
+              style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
             >
-              <option value="">Selecciona una cuenta (opcional)</option>
+              <option value="">Selecciona una cuenta</option>
               {data.accounts.map((acc) => (
                 <option key={acc.id} value={acc.id}>
                   {acc.name} ({formatCOP(acc.balance)})
@@ -1840,46 +1902,66 @@ export default function App() {
               ))}
             </select>
 
-            <select
-              value={txCategory}
-              onChange={(e) => setTxCategory(e.target.value)}
-              style={{
-                backgroundColor: theme.inputBg,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '12px',
-                padding: '12px',
-                color: theme.textPrimary,
-                fontSize: '14px',
-              }}
-            >
-              <option value="">Selecciona una categoría (opcional)</option>
-              {data.categories
-                .filter((c) => c.type === txType)
-                .map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-            </select>
+            {/* Botones rápidos de categoría */}
+            <div>
+              <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
+                Categoría
+              </div>
+              {data.categories.length === 0 ? (
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>
+                  Sin categorías creadas. Puedes escribir una abajo o agregarlas en Configuración.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {data.categories.map((cat) => {
+                    const selected = txCategoryName === cat.name;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setTxCategoryName(selected ? '' : cat.name)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '7px 12px',
+                          borderRadius: '999px',
+                          border: selected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                          backgroundColor: selected ? theme.accentBlueSoft : theme.cardSubtle,
+                          color: selected ? theme.accentBlueText : theme.textPrimary,
+                          fontSize: '13px',
+                          fontWeight: selected ? 700 : 500,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            backgroundColor: selected ? theme.accentBlueText : theme.textMuted,
+                          }}
+                        />
+                        {cat.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             <input
               type="text"
               placeholder="Nota corta (Ej: Almuerzo)"
               value={txNote}
               onChange={(e) => setTxNote(e.target.value)}
-              style={{
-                backgroundColor: theme.inputBg,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '12px',
-                padding: '12px',
-                color: theme.textPrimary,
-                fontSize: '14px',
-              }}
+              style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
             />
 
             <button
               type="submit"
               style={{
+                width: '100%',
                 padding: '14px',
                 borderRadius: '14px',
                 border: 'none',
