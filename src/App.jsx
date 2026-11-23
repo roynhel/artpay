@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v3';
+const STORAGE_KEY = 'artpay_data_v4';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -12,6 +12,18 @@ const DEFAULT_DATA = {
   wishes: [],
   skipCategoryDeleteConfirm: false,
 };
+
+const CATEGORY_ICONS = [
+  { id: 'tag', symbol: '🏷️', label: 'Etiqueta' },
+  { id: 'car', symbol: '🚗', label: 'Carro' },
+  { id: 'car_key', symbol: '🔑', label: 'Gastos del carro / llave' },
+  { id: 'food', symbol: '🍽️', label: 'Comida' },
+  { id: 'money', symbol: '💵', label: 'Dinero / Trabajo' },
+  { id: 'home', symbol: '🏠', label: 'Hogar' },
+  { id: 'phone', symbol: '📱', label: 'Celular / Tech' },
+  { id: 'health', symbol: '🩺', label: 'Salud' },
+  { id: 'gift', symbol: '🎁', label: 'Otros' },
+];
 
 const formatCOP = (value) => {
   const num = Number(value) || 0;
@@ -43,7 +55,11 @@ export default function App() {
           ...DEFAULT_DATA,
           ...parsed,
           categories: Array.isArray(parsed.categories)
-            ? parsed.categories.map((c) => (typeof c === 'string' ? { id: c, name: c } : c))
+            ? parsed.categories.map((c) =>
+                typeof c === 'string'
+                  ? { id: c, name: c, icon: '🏷️' }
+                  : { id: c.id || String(Date.now()), name: c.name, icon: c.icon || '🏷️' }
+              )
             : [],
         };
       }
@@ -81,7 +97,9 @@ export default function App() {
   const [txAmount, setTxAmount] = useState('');
   const [txAccount, setTxAccount] = useState('');
   const [txCategoryName, setTxCategoryName] = useState('');
+  const [txCategoryIcon, setTxCategoryIcon] = useState('🏷️');
   const [txNote, setTxNote] = useState('');
+  const [txError, setTxError] = useState('');
 
   // Secciones minimizables en Configuración
   const [openSections, setOpenSections] = useState({
@@ -102,8 +120,10 @@ export default function App() {
   const [newAccName, setNewAccName] = useState('');
   const [newAccBalance, setNewAccBalance] = useState('');
   const [newCatName, setNewCatName] = useState('');
+  const [newCatIcon, setNewCatIcon] = useState('🏷️');
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
+  const [configNotice, setConfigNotice] = useState('');
 
   // Confirmación de borrado de categorías
   const [catToDelete, setCatToDelete] = useState(null);
@@ -116,6 +136,7 @@ export default function App() {
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const touchStartY = useRef(0);
   const touchIndex = useRef(null);
+  const importInputRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -178,16 +199,18 @@ export default function App() {
     }));
   };
 
-  // --- Categorías (sin tipo fijo al crear) ---
+  // --- Categorías ---
   const handleAddCategory = (e) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
     const created = {
       id: Date.now().toString(),
       name: newCatName.trim(),
+      icon: newCatIcon || '🏷️',
     };
     setData((prev) => ({ ...prev, categories: [...prev.categories, created] }));
     setNewCatName('');
+    setNewCatIcon('🏷️');
   };
 
   const requestDeleteCategory = (cat) => {
@@ -233,22 +256,38 @@ export default function App() {
     }));
   };
 
-  // --- Movimientos ---
+  // --- Movimientos (con validación de saldo suficiente en la cuenta) ---
   const openTransactionModal = () => {
     setTxType('gasto');
     setTxAmount('');
     setTxAccount(data.accounts[0]?.id || '');
     setTxCategoryName('');
+    setTxCategoryIcon('🏷️');
     setTxNote('');
+    setTxError('');
     setShowTxModal(true);
   };
 
   const handleSaveTransaction = (e) => {
     e.preventDefault();
+    setTxError('');
     const amount = parseMoneyInput(txAmount);
-    if (!amount || amount <= 0) return;
+    if (!amount || amount <= 0) {
+      setTxError('Escribe un valor mayor a 0.');
+      return;
+    }
 
     const accountObj = data.accounts.find((a) => a.id === txAccount);
+
+    if (txType === 'gasto' && accountObj) {
+      const currentAccBal = Number(accountObj.balance) || 0;
+      if (amount > currentAccBal) {
+        setTxError(
+          `No puedes gastar ${formatCOP(amount)} en ${accountObj.name}: solo tienes ${formatCOP(currentAccBal)} disponibles.`
+        );
+        return;
+      }
+    }
 
     const newTx = {
       id: Date.now().toString(),
@@ -257,6 +296,7 @@ export default function App() {
       accountId: accountObj?.id || '',
       accountName: accountObj?.name || 'Sin cuenta',
       categoryName: txCategoryName.trim() || 'General',
+      categoryIcon: txCategoryIcon || '🏷️',
       note: txNote.trim(),
       date: new Date().toISOString(),
     };
@@ -287,6 +327,101 @@ export default function App() {
       accounts: restoredAccounts,
       transactions: prev.transactions.filter((t) => t.id !== tx.id),
     }));
+  };
+
+  // --- Exportar / Importar / Descargar PDF ---
+  const handleExportData = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `artpay-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setConfigNotice('Información exportada.');
+    setTimeout(() => setConfigNotice(''), 2500);
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(String(ev.target?.result || '{}'));
+        setData((prev) => ({ ...prev, ...DEFAULT_DATA, ...parsed }));
+        setConfigNotice('Información importada correctamente.');
+      } catch {
+        setConfigNotice('El archivo seleccionado no es un respaldo válido.');
+      }
+      setTimeout(() => setConfigNotice(''), 3000);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleDownloadPDF = () => {
+    const rowsHtml = data.transactions
+      .slice(0, 30)
+      .map(
+        (t) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryIcon || ''} ${t.categoryName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.accountName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.type === 'ingreso' ? 'Ingreso' : 'Gasto'}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">${formatCOP(t.amount)}</td>
+        </tr>`
+      )
+      .join('');
+
+    const wishesHtml = data.wishes
+      .map(
+        (w, i) =>
+          `<li style="margin-bottom:4px;">#${i + 1} <strong>${w.name}</strong> — ${formatCOP(w.price)}</li>`
+      )
+      .join('');
+
+    const printWin = window.open('', '_blank', 'width=680,height=800');
+    if (!printWin) return;
+    printWin.document.write(`
+      <html>
+        <head>
+          <title>Reporte ArtPay</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
+            h1 { margin-bottom: 4px; }
+            .grid { display: flex; gap: 16px; margin: 16px 0; }
+            .box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; flex: 1; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <h1>ArtPay — Resumen Financiero</h1>
+          <p style="color:#64748b;margin-top:0;">${data.userName ? `Usuario: ${data.userName} • ` : ''}Fecha: ${new Date().toLocaleDateString('es-CO')}</p>
+          <div class="grid">
+            <div class="box"><div>Plata disponible</div><strong>${formatCOP(totalAvailable)}</strong></div>
+            <div class="box"><div>Deudas</div><strong>${formatCOP(totalDebts)}</strong></div>
+            <div class="box"><div>Deseos estimados</div><strong>${formatCOP(data.wishes.reduce((s, w) => s + (Number(w.price) || 0), 0))}</strong></div>
+          </div>
+          <h3>Últimos movimientos</h3>
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #94a3b8;">Categoría</th>
+                <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #94a3b8;">Cuenta</th>
+                <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #94a3b8;">Tipo</th>
+                <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #94a3b8;">Valor</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml || '<tr><td colspan="4" style="padding:10px;">Sin movimientos</td></tr>'}</tbody>
+          </table>
+          <h3 style="margin-top:20px;">Lista de deseos</h3>
+          <ol>${wishesHtml || '<li>Sin deseos registrados</li>'}</ol>
+          <script>window.onload = function() { window.print(); };</script>
+        </body>
+      </html>
+    `);
+    printWin.document.close();
   };
 
   // --- Deseos ---
@@ -356,20 +491,21 @@ export default function App() {
         bg: '#050608',
         headerBg: 'rgba(5, 6, 8, 0.88)',
         card: 'linear-gradient(180deg, #16191f 0%, #0b0d10 100%)',
-        availableCard: 'linear-gradient(180deg, #242934 0%, #13171e 100%)',
+        // Aún más clara en modo negro para destacar Plata disponible
+        availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
         cardSolid: '#0e1014',
         cardSubtle: '#13161c',
         border: 'rgba(255, 255, 255, 0.11)',
-        borderStrong: 'rgba(255, 255, 255, 0.24)',
+        borderStrong: 'rgba(255, 255, 255, 0.28)',
         textPrimary: '#FFFFFF',
-        textSecondary: '#B6BDC8',
-        textMuted: '#78808E',
-        silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #C5CCD6 100%)',
+        textSecondary: '#C2C9D4',
+        textMuted: '#828B99',
+        silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CFD6E0 100%)',
         accentBlue: '#2563EB',
         accentBlueSoft: 'rgba(37, 99, 235, 0.16)',
         accentBlueText: '#60A5FA',
-        iconCircleBg: '#1C222D',
-        iconCircleColor: '#E2E8F0',
+        iconCircleBg: '#252C38',
+        iconCircleColor: '#FFFFFF',
         inputBg: '#090B0E',
         navBg: 'rgba(8, 10, 13, 0.94)',
         danger: '#F87171',
@@ -393,8 +529,9 @@ export default function App() {
         accentBlue: '#2563EB',
         accentBlueSoft: 'rgba(37, 99, 235, 0.1)',
         accentBlueText: '#2563EB',
-        iconCircleBg: '#E2E8F0',
-        iconCircleColor: '#0F172A',
+        // Círculo negro alrededor en modo claro
+        iconCircleBg: '#0B0D11',
+        iconCircleColor: '#FFFFFF',
         inputBg: '#F8FAFC',
         navBg: 'rgba(255, 255, 255, 0.95)',
         danger: '#DC2626',
@@ -579,7 +716,7 @@ export default function App() {
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {/* Tarjeta Principal: Plata disponible (más clara en modo negro sin fondo blanco) */}
+            {/* Tarjeta Principal: Plata disponible */}
             <section
               style={{
                 background: theme.availableCard,
@@ -650,7 +787,6 @@ export default function App() {
                 {renderMoney(totalAvailable)}
               </div>
 
-              {/* Resumen HOY */}
               <div
                 style={{
                   fontSize: '11px',
@@ -825,13 +961,16 @@ export default function App() {
                         gap: '10px',
                       }}
                     >
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
-                          {tx.categoryName}
-                        </div>
-                        <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
-                          {tx.accountName}
-                          {tx.note ? ` • ${tx.note}` : ''}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                        <span style={{ fontSize: '18px' }}>{tx.categoryIcon || '🏷️'}</span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
+                            {tx.categoryName}
+                          </div>
+                          <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
+                            {tx.accountName}
+                            {tx.note ? ` • ${tx.note}` : ''}
+                          </div>
                         </div>
                       </div>
 
@@ -876,7 +1015,6 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Estadísticas</h2>
 
-            {/* Barras comparativas: Ingresos vs Gastos */}
             <section
               style={{
                 background: theme.card,
@@ -1079,7 +1217,7 @@ export default function App() {
                 gap: '10px',
               }}
             >
-              <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gap: '8px' }}>
                 <input
                   type="text"
                   placeholder="Ej: Gafas"
@@ -1294,7 +1432,23 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 700, margin: '0 0 2px' }}>Configuración</h2>
 
-            {/* 1. PERFIL */}
+            {configNotice && (
+              <div
+                style={{
+                  backgroundColor: theme.accentBlueSoft,
+                  border: `1px solid ${theme.accentBlue}`,
+                  color: theme.accentBlueText,
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                }}
+              >
+                {configNotice}
+              </div>
+            )}
+
+            {/* 1. PERFIL (con Importar / Exportar adentro) */}
             <section
               style={{
                 background: theme.card,
@@ -1325,20 +1479,66 @@ export default function App() {
               </button>
 
               {openSections.perfil && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <label style={{ fontSize: '12px', color: theme.textSecondary }}>Tu nombre</label>
-                  <input
-                    type="text"
-                    placeholder="Ej: Roynhel"
-                    value={data.userName}
-                    onChange={(e) => setData((prev) => ({ ...prev, userName: e.target.value }))}
-                    style={baseInputStyle}
-                  />
+                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
+                      Tu nombre
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej: Roynhel"
+                      value={data.userName}
+                      onChange={(e) => setData((prev) => ({ ...prev, userName: e.target.value }))}
+                      style={baseInputStyle}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '2px' }}>
+                    <button
+                      type="button"
+                      onClick={handleExportData}
+                      style={{
+                        padding: '10px',
+                        borderRadius: '10px',
+                        border: `1px solid ${theme.borderStrong}`,
+                        backgroundColor: theme.cardSubtle,
+                        color: theme.textPrimary,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Exportar información
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => importInputRef.current?.click()}
+                      style={{
+                        padding: '10px',
+                        borderRadius: '10px',
+                        border: `1px solid ${theme.borderStrong}`,
+                        backgroundColor: theme.cardSubtle,
+                        color: theme.textPrimary,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Importar información
+                    </button>
+                    <input
+                      ref={importInputRef}
+                      type="file"
+                      accept="application/json"
+                      onChange={handleImportFile}
+                      style={{ display: 'none' }}
+                    />
+                  </div>
                 </div>
               )}
             </section>
 
-            {/* 2. APARIENCIA (Negro / Claro / Sistema) */}
+            {/* 2. APARIENCIA */}
             <section
               style={{
                 background: theme.card,
@@ -1544,7 +1744,7 @@ export default function App() {
               )}
             </section>
 
-            {/* 4. CATEGORÍAS (Solo nombre, sin tipo fijo al crear) */}
+            {/* 4. CATEGORÍAS (con selector de ícono / logo) */}
             <section
               style={{
                 background: theme.card,
@@ -1588,7 +1788,7 @@ export default function App() {
                         borderRadius: '10px',
                       }}
                     >
-                      Agrega categorías abajo (Ej: <strong>Comida</strong>). Tú eliges si es ingreso o gasto al registrar.
+                      Agrega una categoría, elige su ícono (Ej: 🚗 Carro, 🔑 Gastos del carro, 🍽️ Comida, 💵 Trabajo) y listo.
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -1598,7 +1798,7 @@ export default function App() {
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '8px',
+                            gap: '6px',
                             backgroundColor: theme.cardSubtle,
                             border: `1px solid ${theme.border}`,
                             borderRadius: '999px',
@@ -1606,6 +1806,7 @@ export default function App() {
                             fontSize: '13px',
                           }}
                         >
+                          <span>{cat.icon || '🏷️'}</span>
                           <span>{cat.name}</span>
                           <button
                             type="button"
@@ -1646,30 +1847,60 @@ export default function App() {
                     </div>
                   )}
 
-                  <form onSubmit={handleAddCategory} style={{ display: 'flex', gap: '8px' }}>
-                    <input
-                      type="text"
-                      placeholder="Ej: Comida"
-                      value={newCatName}
-                      onChange={(e) => setNewCatName(e.target.value)}
-                      style={{ ...baseInputStyle, flex: 1 }}
-                    />
-                    <button
-                      type="submit"
-                      style={{
-                        padding: '10px 14px',
-                        borderRadius: '10px',
-                        border: 'none',
-                        backgroundColor: theme.accentBlue,
-                        color: '#FFFFFF',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      + Agregar
-                    </button>
+                  <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {CATEGORY_ICONS.map((ic) => {
+                        const active = newCatIcon === ic.symbol;
+                        return (
+                          <button
+                            key={ic.id}
+                            type="button"
+                            title={ic.label}
+                            onClick={() => setNewCatIcon(ic.symbol)}
+                            style={{
+                              width: '34px',
+                              height: '34px',
+                              borderRadius: '10px',
+                              border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                              backgroundColor: active ? theme.accentBlueSoft : theme.inputBg,
+                              fontSize: '16px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            {ic.symbol}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        type="text"
+                        placeholder="Ej: Gastos del carro"
+                        value={newCatName}
+                        onChange={(e) => setNewCatName(e.target.value)}
+                        style={{ ...baseInputStyle, flex: 1 }}
+                      />
+                      <button
+                        type="submit"
+                        style={{
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          border: 'none',
+                          backgroundColor: theme.accentBlue,
+                          color: '#FFFFFF',
+                          fontSize: '13px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        + Agregar
+                      </button>
+                    </div>
                   </form>
                 </div>
               )}
@@ -1796,6 +2027,25 @@ export default function App() {
                 </div>
               )}
             </section>
+
+            {/* Botón directo al final: Descargar PDF */}
+            <button
+              type="button"
+              onClick={handleDownloadPDF}
+              style={{
+                width: '100%',
+                padding: '13px',
+                borderRadius: '14px',
+                border: `1px solid ${theme.borderStrong}`,
+                background: theme.card,
+                color: theme.textPrimary,
+                fontSize: '14px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Descargar PDF
+            </button>
           </div>
         )}
       </main>
@@ -1826,6 +2076,8 @@ export default function App() {
               flexDirection: 'column',
               gap: '12px',
               boxSizing: 'border-box',
+              maxHeight: '90dvh',
+              overflowY: 'auto',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1848,7 +2100,10 @@ export default function App() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
               <button
                 type="button"
-                onClick={() => setTxType('gasto')}
+                onClick={() => {
+                  setTxType('gasto');
+                  setTxError('');
+                }}
                 style={{
                   padding: '10px',
                   borderRadius: '12px',
@@ -1863,7 +2118,10 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setTxType('ingreso')}
+                onClick={() => {
+                  setTxType('ingreso');
+                  setTxError('');
+                }}
                 style={{
                   padding: '10px',
                   borderRadius: '12px',
@@ -1883,7 +2141,10 @@ export default function App() {
               inputMode="numeric"
               placeholder="Valor (Ej: 25.000)"
               value={txAmount}
-              onChange={(e) => setTxAmount(formatMoneyInput(e.target.value))}
+              onChange={(e) => {
+                setTxAmount(formatMoneyInput(e.target.value));
+                setTxError('');
+              }}
               required
               style={{ ...baseInputStyle, fontSize: '16px', fontWeight: 700, padding: '12px' }}
             />
@@ -1891,7 +2152,10 @@ export default function App() {
             {/* Selección de cuenta */}
             <select
               value={txAccount}
-              onChange={(e) => setTxAccount(e.target.value)}
+              onChange={(e) => {
+                setTxAccount(e.target.value);
+                setTxError('');
+              }}
               style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
             >
               <option value="">Selecciona una cuenta</option>
@@ -1902,24 +2166,39 @@ export default function App() {
               ))}
             </select>
 
-            {/* Botones rápidos de categoría */}
+            {txError && (
+              <div
+                style={{
+                  backgroundColor: theme.dangerBg,
+                  border: `1px solid ${theme.danger}`,
+                  color: theme.danger,
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                }}
+              >
+                {txError}
+              </div>
+            )}
+
+            {/* Categorías rápidas con ícono/logo */}
             <div>
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
                 Categoría
               </div>
-              {data.categories.length === 0 ? (
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>
-                  Sin categorías creadas. Puedes escribir una abajo o agregarlas en Configuración.
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {data.categories.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
                   {data.categories.map((cat) => {
                     const selected = txCategoryName === cat.name;
                     return (
                       <button
                         key={cat.id}
                         type="button"
-                        onClick={() => setTxCategoryName(selected ? '' : cat.name)}
+                        onClick={() => {
+                          setTxCategoryName(selected ? '' : cat.name);
+                          setTxCategoryIcon(cat.icon || '🏷️');
+                        }}
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -1934,20 +2213,21 @@ export default function App() {
                           cursor: 'pointer',
                         }}
                       >
-                        <span
-                          style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            backgroundColor: selected ? theme.accentBlueText : theme.textMuted,
-                          }}
-                        />
-                        {cat.name}
+                        <span>{cat.icon || '🏷️'}</span>
+                        <span>{cat.name}</span>
                       </button>
                     );
                   })}
                 </div>
               )}
+
+              <input
+                type="text"
+                placeholder="O escribe una categoría (Ej: Comida)"
+                value={txCategoryName}
+                onChange={(e) => setTxCategoryName(e.target.value)}
+                style={{ ...baseInputStyle, fontSize: '13px', padding: '10px 12px' }}
+              />
             </div>
 
             <input
