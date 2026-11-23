@@ -91,7 +91,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('inicio'); // inicio | estadisticas | deseos | config
   const [hideBalances, setHideBalances] = useState(false);
 
-  // Modal de nuevo movimiento (estados ligeros para escritura fluida)
+  // Modal de nuevo movimiento
   const [showTxModal, setShowTxModal] = useState(false);
   const [txType, setTxType] = useState('gasto'); // ingreso | gasto
   const [txAmount, setTxAmount] = useState('');
@@ -138,7 +138,6 @@ export default function App() {
   const touchIndex = useRef(null);
   const importInputRef = useRef(null);
 
-  // Guardado en localStorage con pequeño debounce para no trabar al escribir
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
@@ -152,7 +151,6 @@ export default function App() {
 
   const isDark = data.theme === 'system' ? systemPrefersDark : data.theme === 'dark';
 
-  // Sincronizar meta tags de barra superior según el tema activo
   useEffect(() => {
     const themeMeta = document.getElementById('theme-color-meta');
     const appleMeta = document.getElementById('apple-status-bar-meta');
@@ -164,7 +162,6 @@ export default function App() {
     }
   }, [isDark]);
 
-  // Cálculos financieros memorizados
   const { totalAvailable, totalDebts, todayIncome, todayExpense } = useMemo(() => {
     const avail = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
     const debts = data.debts.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
@@ -511,7 +508,7 @@ export default function App() {
       isDark
         ? {
             bg: '#050608',
-            headerBg: 'rgba(5, 6, 8, 0.92)',
+            headerBg: '#050608',
             card: 'linear-gradient(180deg, #16191f 0%, #0b0d10 100%)',
             availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
             cardSolid: '#0e1014',
@@ -528,7 +525,7 @@ export default function App() {
             iconCircleBg: '#252C38',
             iconCircleColor: '#FFFFFF',
             inputBg: '#090B0E',
-            navBg: 'rgba(8, 10, 13, 0.95)',
+            navBg: '#080A0D',
             danger: '#F87171',
             dangerBg: 'rgba(239, 68, 68, 0.14)',
             success: '#34D399',
@@ -536,7 +533,7 @@ export default function App() {
           }
         : {
             bg: '#F4F6F9',
-            headerBg: 'rgba(244, 246, 249, 0.92)',
+            headerBg: '#F4F6F9',
             card: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
             availableCard: 'linear-gradient(180deg, #FFFFFF 0%, #F1F5F9 100%)',
             cardSolid: '#FFFFFF',
@@ -553,7 +550,7 @@ export default function App() {
             iconCircleBg: '#0B0D11',
             iconCircleColor: '#FFFFFF',
             inputBg: '#F8FAFC',
-            navBg: 'rgba(255, 255, 255, 0.95)',
+            navBg: '#FFFFFF',
             danger: '#DC2626',
             dangerBg: 'rgba(220, 38, 38, 0.1)',
             success: '#059669',
@@ -652,17 +649,18 @@ export default function App() {
         transition: 'background-color 0.25s ease, color 0.25s ease',
       }}
     >
-      {/* Header superior */}
+      {/* Header superior con margen seguro para iPhone */}
       <header
         style={{
           position: 'sticky',
           top: 0,
           zIndex: 20,
           backgroundColor: theme.headerBg,
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
           borderBottom: `1px solid ${theme.border}`,
-          padding: '14px 18px',
+          paddingTop: 'calc(14px + env(safe-area-inset-top))',
+          paddingRight: '18px',
+          paddingBottom: '14px',
+          paddingLeft: '18px',
         }}
       >
         <div
@@ -2461,8 +2459,6 @@ export default function App() {
           right: 0,
           zIndex: 30,
           backgroundColor: theme.navBg,
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
           borderTop: `1px solid ${theme.border}`,
           padding: '8px 8px calc(10px + env(safe-area-inset-bottom))',
         }}
