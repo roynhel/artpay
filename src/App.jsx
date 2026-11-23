@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v4';
+const STORAGE_KEY = 'artpay_data_v5';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -14,15 +14,15 @@ const DEFAULT_DATA = {
 };
 
 const CATEGORY_ICONS = [
+  { id: 'none', symbol: '', label: 'Sin emoji' },
   { id: 'tag', symbol: '🏷️', label: 'Etiqueta' },
   { id: 'car', symbol: '🚗', label: 'Carro' },
-  { id: 'car_key', symbol: '🔑', label: 'Gastos del carro / llave' },
+  { id: 'car_key', symbol: '🔑', label: 'Llave / Carro' },
   { id: 'food', symbol: '🍽️', label: 'Comida' },
   { id: 'money', symbol: '💵', label: 'Dinero / Trabajo' },
   { id: 'home', symbol: '🏠', label: 'Hogar' },
-  { id: 'phone', symbol: '📱', label: 'Celular / Tech' },
-  { id: 'health', symbol: '🩺', label: 'Salud' },
-  { id: 'gift', symbol: '🎁', label: 'Otros' },
+  { id: 'phone', symbol: '📱', label: 'Celular' },
+  { id: 'gift', symbol: '🎁', label: 'Regalo / Extra' },
 ];
 
 const formatCOP = (value) => {
@@ -55,11 +55,11 @@ export default function App() {
           ...DEFAULT_DATA,
           ...parsed,
           categories: Array.isArray(parsed.categories)
-            ? parsed.categories.map((c) =>
-                typeof c === 'string'
-                  ? { id: c, name: c, icon: '🏷️' }
-                  : { id: c.id || String(Date.now()), name: c.name, icon: c.icon || '🏷️' }
-              )
+            ? parsed.categories.map((c) => {
+                if (typeof c === 'string') return { id: c, name: c, icon: '' };
+                const cleanIcon = c.icon === '🩺' ? '' : c.icon || '';
+                return { id: c.id || String(Date.now()), name: c.name, icon: cleanIcon };
+              })
             : [],
         };
       }
@@ -91,13 +91,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('inicio'); // inicio | estadisticas | deseos | config
   const [hideBalances, setHideBalances] = useState(false);
 
-  // Modal de nuevo movimiento
+  // Modal de nuevo movimiento (estados ligeros para escritura fluida)
   const [showTxModal, setShowTxModal] = useState(false);
   const [txType, setTxType] = useState('gasto'); // ingreso | gasto
   const [txAmount, setTxAmount] = useState('');
   const [txAccount, setTxAccount] = useState('');
   const [txCategoryName, setTxCategoryName] = useState('');
-  const [txCategoryIcon, setTxCategoryIcon] = useState('🏷️');
+  const [txCategoryIcon, setTxCategoryIcon] = useState('');
   const [txNote, setTxNote] = useState('');
   const [txError, setTxError] = useState('');
 
@@ -120,7 +120,7 @@ export default function App() {
   const [newAccName, setNewAccName] = useState('');
   const [newAccBalance, setNewAccBalance] = useState('');
   const [newCatName, setNewCatName] = useState('');
-  const [newCatIcon, setNewCatIcon] = useState('🏷️');
+  const [newCatIcon, setNewCatIcon] = useState('');
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
   const [configNotice, setConfigNotice] = useState('');
@@ -138,36 +138,56 @@ export default function App() {
   const touchIndex = useRef(null);
   const importInputRef = useRef(null);
 
+  // Guardado en localStorage con pequeño debounce para no trabar al escribir
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.error(e);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      } catch (e) {
+        console.error(e);
+      }
+    }, 180);
+    return () => clearTimeout(timer);
   }, [data]);
 
   const isDark = data.theme === 'system' ? systemPrefersDark : data.theme === 'dark';
 
-  // Cálculos financieros
-  const totalAvailable = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
-  const totalDebts = data.debts.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
+  // Sincronizar meta tags de barra superior según el tema activo
+  useEffect(() => {
+    const themeMeta = document.getElementById('theme-color-meta');
+    const appleMeta = document.getElementById('apple-status-bar-meta');
+    if (themeMeta) {
+      themeMeta.setAttribute('content', isDark ? '#050608' : '#F4F6F9');
+    }
+    if (appleMeta) {
+      appleMeta.setAttribute('content', isDark ? 'black-translucent' : 'default');
+    }
+  }, [isDark]);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayTxs = data.transactions.filter((t) => t.date.startsWith(todayStr));
-  const todayIncome = todayTxs
-    .filter((t) => t.type === 'ingreso')
-    .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
-  const todayExpense = todayTxs
-    .filter((t) => t.type === 'gasto')
-    .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+  // Cálculos financieros memorizados
+  const { totalAvailable, totalDebts, todayIncome, todayExpense } = useMemo(() => {
+    const avail = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
+    const debts = data.debts.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let inc = 0;
+    let exp = 0;
+    for (let i = 0; i < data.transactions.length; i += 1) {
+      const t = data.transactions[i];
+      if (t.date && t.date.startsWith(todayStr)) {
+        if (t.type === 'ingreso') inc += Number(t.amount) || 0;
+        else exp += Number(t.amount) || 0;
+      }
+    }
+    return { totalAvailable: avail, totalDebts: debts, todayIncome: inc, todayExpense: exp };
+  }, [data.accounts, data.debts, data.transactions]);
 
-  const toggleSection = (key) => {
+  const toggleSection = useCallback((key) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  }, []);
 
-  const toggleStat = (key) => {
+  const toggleStat = useCallback((key) => {
     setOpenStats((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  }, []);
 
   // --- Cuentas ---
   const handleAddAccount = (e) => {
@@ -206,11 +226,11 @@ export default function App() {
     const created = {
       id: Date.now().toString(),
       name: newCatName.trim(),
-      icon: newCatIcon || '🏷️',
+      icon: newCatIcon || '',
     };
     setData((prev) => ({ ...prev, categories: [...prev.categories, created] }));
     setNewCatName('');
-    setNewCatIcon('🏷️');
+    setNewCatIcon('');
   };
 
   const requestDeleteCategory = (cat) => {
@@ -256,13 +276,13 @@ export default function App() {
     }));
   };
 
-  // --- Movimientos (con validación de saldo suficiente en la cuenta) ---
+  // --- Movimientos ---
   const openTransactionModal = () => {
     setTxType('gasto');
     setTxAmount('');
     setTxAccount(data.accounts[0]?.id || '');
     setTxCategoryName('');
-    setTxCategoryIcon('🏷️');
+    setTxCategoryIcon('');
     setTxNote('');
     setTxError('');
     setShowTxModal(true);
@@ -296,7 +316,7 @@ export default function App() {
       accountId: accountObj?.id || '',
       accountName: accountObj?.name || 'Sin cuenta',
       categoryName: txCategoryName.trim() || 'General',
-      categoryIcon: txCategoryIcon || '🏷️',
+      categoryIcon: txCategoryIcon || '',
       note: txNote.trim(),
       date: new Date().toISOString(),
     };
@@ -366,7 +386,7 @@ export default function App() {
       .map(
         (t) => `
         <tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryIcon || ''} ${t.categoryName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryIcon ? `${t.categoryIcon} ` : ''}${t.categoryName}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.accountName}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.type === 'ingreso' ? 'Ingreso' : 'Gasto'}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">${formatCOP(t.amount)}</td>
@@ -486,59 +506,61 @@ export default function App() {
     setDragOverIndex(null);
   };
 
-  const theme = isDark
-    ? {
-        bg: '#050608',
-        headerBg: 'rgba(5, 6, 8, 0.88)',
-        card: 'linear-gradient(180deg, #16191f 0%, #0b0d10 100%)',
-        // Aún más clara en modo negro para destacar Plata disponible
-        availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
-        cardSolid: '#0e1014',
-        cardSubtle: '#13161c',
-        border: 'rgba(255, 255, 255, 0.11)',
-        borderStrong: 'rgba(255, 255, 255, 0.28)',
-        textPrimary: '#FFFFFF',
-        textSecondary: '#C2C9D4',
-        textMuted: '#828B99',
-        silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CFD6E0 100%)',
-        accentBlue: '#2563EB',
-        accentBlueSoft: 'rgba(37, 99, 235, 0.16)',
-        accentBlueText: '#60A5FA',
-        iconCircleBg: '#252C38',
-        iconCircleColor: '#FFFFFF',
-        inputBg: '#090B0E',
-        navBg: 'rgba(8, 10, 13, 0.94)',
-        danger: '#F87171',
-        dangerBg: 'rgba(239, 68, 68, 0.14)',
-        success: '#34D399',
-        successBg: 'rgba(16, 185, 129, 0.14)',
-      }
-    : {
-        bg: '#F4F6F9',
-        headerBg: 'rgba(244, 246, 249, 0.9)',
-        card: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-        availableCard: 'linear-gradient(180deg, #FFFFFF 0%, #F1F5F9 100%)',
-        cardSolid: '#FFFFFF',
-        cardSubtle: '#EEF2F6',
-        border: 'rgba(15, 23, 42, 0.09)',
-        borderStrong: 'rgba(15, 23, 42, 0.18)',
-        textPrimary: '#0B0D11',
-        textSecondary: '#475569',
-        textMuted: '#64748B',
-        silverGradient: 'linear-gradient(180deg, #0B0D11 0%, #334155 100%)',
-        accentBlue: '#2563EB',
-        accentBlueSoft: 'rgba(37, 99, 235, 0.1)',
-        accentBlueText: '#2563EB',
-        // Círculo negro alrededor en modo claro
-        iconCircleBg: '#0B0D11',
-        iconCircleColor: '#FFFFFF',
-        inputBg: '#F8FAFC',
-        navBg: 'rgba(255, 255, 255, 0.95)',
-        danger: '#DC2626',
-        dangerBg: 'rgba(220, 38, 38, 0.1)',
-        success: '#059669',
-        successBg: 'rgba(5, 150, 105, 0.1)',
-      };
+  const theme = useMemo(
+    () =>
+      isDark
+        ? {
+            bg: '#050608',
+            headerBg: 'rgba(5, 6, 8, 0.92)',
+            card: 'linear-gradient(180deg, #16191f 0%, #0b0d10 100%)',
+            availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
+            cardSolid: '#0e1014',
+            cardSubtle: '#13161c',
+            border: 'rgba(255, 255, 255, 0.11)',
+            borderStrong: 'rgba(255, 255, 255, 0.28)',
+            textPrimary: '#FFFFFF',
+            textSecondary: '#C2C9D4',
+            textMuted: '#828B99',
+            silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CFD6E0 100%)',
+            accentBlue: '#2563EB',
+            accentBlueSoft: 'rgba(37, 99, 235, 0.16)',
+            accentBlueText: '#60A5FA',
+            iconCircleBg: '#252C38',
+            iconCircleColor: '#FFFFFF',
+            inputBg: '#090B0E',
+            navBg: 'rgba(8, 10, 13, 0.95)',
+            danger: '#F87171',
+            dangerBg: 'rgba(239, 68, 68, 0.14)',
+            success: '#34D399',
+            successBg: 'rgba(16, 185, 129, 0.14)',
+          }
+        : {
+            bg: '#F4F6F9',
+            headerBg: 'rgba(244, 246, 249, 0.92)',
+            card: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+            availableCard: 'linear-gradient(180deg, #FFFFFF 0%, #F1F5F9 100%)',
+            cardSolid: '#FFFFFF',
+            cardSubtle: '#EEF2F6',
+            border: 'rgba(15, 23, 42, 0.09)',
+            borderStrong: 'rgba(15, 23, 42, 0.18)',
+            textPrimary: '#0B0D11',
+            textSecondary: '#475569',
+            textMuted: '#64748B',
+            silverGradient: 'linear-gradient(180deg, #0B0D11 0%, #334155 100%)',
+            accentBlue: '#2563EB',
+            accentBlueSoft: 'rgba(37, 99, 235, 0.1)',
+            accentBlueText: '#2563EB',
+            iconCircleBg: '#0B0D11',
+            iconCircleColor: '#FFFFFF',
+            inputBg: '#F8FAFC',
+            navBg: 'rgba(255, 255, 255, 0.95)',
+            danger: '#DC2626',
+            dangerBg: 'rgba(220, 38, 38, 0.1)',
+            success: '#059669',
+            successBg: 'rgba(5, 150, 105, 0.1)',
+          },
+    [isDark]
+  );
 
   const baseInputStyle = {
     width: '100%',
@@ -555,25 +577,36 @@ export default function App() {
 
   const renderMoney = (val) => (hideBalances ? '••••••' : formatCOP(val));
 
-  const expenseByCategory = data.transactions
-    .filter((t) => t.type === 'gasto')
-    .reduce((acc, t) => {
-      acc[t.categoryName] = (acc[t.categoryName] || 0) + Number(t.amount);
-      return acc;
-    }, {});
+  const { expenseByCategory, incomeByCategory, totalAllExpenses, totalAllIncomes, totalCompare } = useMemo(() => {
+    const expCat = {};
+    const incCat = {};
+    let expSum = 0;
+    let incSum = 0;
+    for (let i = 0; i < data.transactions.length; i += 1) {
+      const t = data.transactions[i];
+      const amt = Number(t.amount) || 0;
+      const cat = t.categoryName || 'General';
+      if (t.type === 'gasto') {
+        expCat[cat] = (expCat[cat] || 0) + amt;
+        expSum += amt;
+      } else if (t.type === 'ingreso') {
+        incCat[cat] = (incCat[cat] || 0) + amt;
+        incSum += amt;
+      }
+    }
+    return {
+      expenseByCategory: expCat,
+      incomeByCategory: incCat,
+      totalAllExpenses: expSum,
+      totalAllIncomes: incSum,
+      totalCompare: Math.max(incSum + expSum, 1),
+    };
+  }, [data.transactions]);
 
-  const incomeByCategory = data.transactions
-    .filter((t) => t.type === 'ingreso')
-    .reduce((acc, t) => {
-      acc[t.categoryName] = (acc[t.categoryName] || 0) + Number(t.amount);
-      return acc;
-    }, {});
-
-  const totalAllExpenses = Object.values(expenseByCategory).reduce((a, b) => a + b, 0);
-  const totalAllIncomes = Object.values(incomeByCategory).reduce((a, b) => a + b, 0);
-  const totalCompare = Math.max(totalAllIncomes + totalAllExpenses, 1);
-
-  const totalWishesValue = data.wishes.reduce((acc, w) => acc + (Number(w.price) || 0), 0);
+  const totalWishesValue = useMemo(
+    () => data.wishes.reduce((acc, w) => acc + (Number(w.price) || 0), 0),
+    [data.wishes]
+  );
 
   const getWishRankStyle = (idx) => {
     if (idx === 0) {
@@ -716,7 +749,6 @@ export default function App() {
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {/* Tarjeta Principal: Plata disponible */}
             <section
               style={{
                 background: theme.availableCard,
@@ -962,7 +994,7 @@ export default function App() {
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                        <span style={{ fontSize: '18px' }}>{tx.categoryIcon || '🏷️'}</span>
+                        {tx.categoryIcon ? <span style={{ fontSize: '18px' }}>{tx.categoryIcon}</span> : null}
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
                             {tx.categoryName}
@@ -1448,7 +1480,7 @@ export default function App() {
               </div>
             )}
 
-            {/* 1. PERFIL (con Importar / Exportar adentro) */}
+            {/* 1. PERFIL */}
             <section
               style={{
                 background: theme.card,
@@ -1533,6 +1565,9 @@ export default function App() {
                       onChange={handleImportFile}
                       style={{ display: 'none' }}
                     />
+                  </div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.35 }}>
+                    Exportar guarda una copia de tus datos en archivo; Importar carga un respaldo guardado antes.
                   </div>
                 </div>
               )}
@@ -1744,7 +1779,7 @@ export default function App() {
               )}
             </section>
 
-            {/* 4. CATEGORÍAS (con selector de ícono / logo) */}
+            {/* 4. CATEGORÍAS */}
             <section
               style={{
                 background: theme.card,
@@ -1788,7 +1823,7 @@ export default function App() {
                         borderRadius: '10px',
                       }}
                     >
-                      Agrega una categoría, elige su ícono (Ej: 🚗 Carro, 🔑 Gastos del carro, 🍽️ Comida, 💵 Trabajo) y listo.
+                      Agrega una categoría. Elegir un emoji es opcional (puedes dejar <strong>✕</strong> sin emoji).
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -1806,7 +1841,7 @@ export default function App() {
                             fontSize: '13px',
                           }}
                         >
-                          <span>{cat.icon || '🏷️'}</span>
+                          {cat.icon ? <span>{cat.icon}</span> : null}
                           <span>{cat.name}</span>
                           <button
                             type="button"
@@ -1863,14 +1898,16 @@ export default function App() {
                               borderRadius: '10px',
                               border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
                               backgroundColor: active ? theme.accentBlueSoft : theme.inputBg,
-                              fontSize: '16px',
+                              color: ic.symbol ? theme.textPrimary : theme.textMuted,
+                              fontSize: ic.symbol ? '16px' : '12px',
+                              fontWeight: 700,
                               cursor: 'pointer',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                             }}
                           >
-                            {ic.symbol}
+                            {ic.symbol || '✕'}
                           </button>
                         );
                       })}
@@ -2028,24 +2065,29 @@ export default function App() {
               )}
             </section>
 
-            {/* Botón directo al final: Descargar PDF */}
-            <button
-              type="button"
-              onClick={handleDownloadPDF}
-              style={{
-                width: '100%',
-                padding: '13px',
-                borderRadius: '14px',
-                border: `1px solid ${theme.borderStrong}`,
-                background: theme.card,
-                color: theme.textPrimary,
-                fontSize: '14px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Descargar PDF
-            </button>
+            {/* Botón directo al final: Descargar PDF + nota pequeña */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              <button
+                type="button"
+                onClick={handleDownloadPDF}
+                style={{
+                  width: '100%',
+                  padding: '13px',
+                  borderRadius: '14px',
+                  border: `1px solid ${theme.borderStrong}`,
+                  background: theme.card,
+                  color: theme.textPrimary,
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Descargar PDF
+              </button>
+              <div style={{ fontSize: '11px', color: theme.textMuted, paddingLeft: '4px', lineHeight: 1.35 }}>
+                Crea una vista imprimible o para guardar como PDF con tu saldo disponible, deudas, movimientos y deseos.
+              </div>
+            </div>
           </div>
         )}
       </main>
@@ -2102,7 +2144,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setTxType('gasto');
-                  setTxError('');
+                  if (txError) setTxError('');
                 }}
                 style={{
                   padding: '10px',
@@ -2120,7 +2162,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setTxType('ingreso');
-                  setTxError('');
+                  if (txError) setTxError('');
                 }}
                 style={{
                   padding: '10px',
@@ -2143,18 +2185,17 @@ export default function App() {
               value={txAmount}
               onChange={(e) => {
                 setTxAmount(formatMoneyInput(e.target.value));
-                setTxError('');
+                if (txError) setTxError('');
               }}
               required
               style={{ ...baseInputStyle, fontSize: '16px', fontWeight: 700, padding: '12px' }}
             />
 
-            {/* Selección de cuenta */}
             <select
               value={txAccount}
               onChange={(e) => {
                 setTxAccount(e.target.value);
-                setTxError('');
+                if (txError) setTxError('');
               }}
               style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
             >
@@ -2182,7 +2223,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Categorías rápidas con ícono/logo */}
             <div>
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
                 Categoría
@@ -2197,7 +2237,7 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setTxCategoryName(selected ? '' : cat.name);
-                          setTxCategoryIcon(cat.icon || '🏷️');
+                          setTxCategoryIcon(selected ? '' : cat.icon || '');
                         }}
                         style={{
                           display: 'inline-flex',
@@ -2213,7 +2253,7 @@ export default function App() {
                           cursor: 'pointer',
                         }}
                       >
-                        <span>{cat.icon || '🏷️'}</span>
+                        {cat.icon ? <span>{cat.icon}</span> : null}
                         <span>{cat.name}</span>
                       </button>
                     );
