@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v5';
+const STORAGE_KEY = 'artpay_data_v6';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -11,19 +11,95 @@ const DEFAULT_DATA = {
   transactions: [],
   wishes: [],
   skipCategoryDeleteConfirm: false,
+  skipAccountDeleteConfirm: false,
 };
 
-const CATEGORY_ICONS = [
-  { id: 'none', symbol: '', label: 'Sin emoji' },
-  { id: 'tag', symbol: '🏷️', label: 'Etiqueta' },
-  { id: 'car', symbol: '🚗', label: 'Carro' },
-  { id: 'car_key', symbol: '🔑', label: 'Llave / Carro' },
-  { id: 'food', symbol: '🍽️', label: 'Comida' },
-  { id: 'money', symbol: '💵', label: 'Dinero / Trabajo' },
-  { id: 'home', symbol: '🏠', label: 'Hogar' },
-  { id: 'phone', symbol: '📱', label: 'Celular' },
-  { id: 'gift', symbol: '🎁', label: 'Regalo / Extra' },
+const ICON_OPTIONS = [
+  { id: 'none', label: 'Sin ícono' },
+  { id: 'tag', label: 'Etiqueta' },
+  { id: 'car', label: 'Carro' },
+  { id: 'key', label: 'Llave / Carro' },
+  { id: 'food', label: 'Comida' },
+  { id: 'money', label: 'Dinero / Trabajo' },
+  { id: 'home', label: 'Hogar' },
+  { id: 'phone', label: 'Celular' },
+  { id: 'gift', label: 'Regalo / Extra' },
 ];
+
+const CategoryGlyph = ({ iconId, size = 16, color = 'currentColor' }) => {
+  if (!iconId || iconId === 'none') return null;
+
+  switch (iconId) {
+    case 'car':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 17h14v-5l-2-5H7L5 12v5z" />
+          <circle cx="7.5" cy="17" r="1.5" />
+          <circle cx="16.5" cy="17" r="1.5" />
+          <path d="M5 12h14" />
+        </svg>
+      );
+    case 'key':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="7.5" cy="15.5" r="4.5" />
+          <path d="M10.85 12.15L21 2" />
+          <path d="M18 5l3 3" />
+          <path d="M15 8l3 3" />
+        </svg>
+      );
+    case 'food':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7 2v20" />
+          <path d="M4 2v6a3 3 0 0 0 6 0V2" />
+          <path d="M17 2v20" />
+          <path d="M17 2c2.5 0 4 2 4 5s-1.5 5-4 5" />
+        </svg>
+      );
+    case 'money':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="6" width="20" height="12" rx="2" />
+          <circle cx="12" cy="12" r="2.5" />
+          <path d="M6 12h.01M18 12h.01" />
+        </svg>
+      );
+    case 'home':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 10.5L12 3l9 7.5" />
+          <path d="M5 9.5V20h14V9.5" />
+          <path d="M10 20v-6h4v6" />
+        </svg>
+      );
+    case 'phone':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="6" y="2" width="12" height="20" rx="2.5" />
+          <line x1="11" y1="18" x2="13" y2="18" />
+        </svg>
+      );
+    case 'gift':
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="8" width="18" height="4" rx="1" />
+          <path d="M12 8v13" />
+          <path d="M19 12v9H5v-9" />
+          <path d="M12 8c0-2.5-2-4-4-4s-3 1.2-3 2.5S6.5 8 12 8z" />
+          <path d="M12 8c0-2.5 2-4 4-4s3 1.2 3 2.5S17.5 8 12 8z" />
+        </svg>
+      );
+    case 'tag':
+    default:
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+          <circle cx="7" cy="7" r="1.5" />
+        </svg>
+      );
+  }
+};
 
 const formatCOP = (value) => {
   const num = Number(value) || 0;
@@ -56,9 +132,10 @@ export default function App() {
           ...parsed,
           categories: Array.isArray(parsed.categories)
             ? parsed.categories.map((c) => {
-                if (typeof c === 'string') return { id: c, name: c, icon: '' };
-                const cleanIcon = c.icon === '🩺' ? '' : c.icon || '';
-                return { id: c.id || String(Date.now()), name: c.name, icon: cleanIcon };
+                if (typeof c === 'string') return { id: c, name: c, icon: 'none' };
+                const validIds = new Set(ICON_OPTIONS.map((i) => i.id));
+                const iconId = validIds.has(c.icon) ? c.icon : 'none';
+                return { id: c.id || String(Date.now()), name: c.name, icon: iconId };
               })
             : [],
         };
@@ -90,6 +167,34 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('inicio'); // inicio | estadisticas | deseos | config
   const [hideBalances, setHideBalances] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Gestos de deslizamiento horizontal para abrir/cerrar menú lateral
+  const swipeStartX = useRef(null);
+  const swipeStartY = useRef(null);
+
+  const handleScreenTouchStart = (e) => {
+    const t = e.touches[0];
+    swipeStartX.current = t.clientX;
+    swipeStartY.current = t.clientY;
+  };
+
+  const handleScreenTouchEnd = (e) => {
+    if (swipeStartX.current === null || swipeStartY.current === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swipeStartX.current;
+    const dy = Math.abs(t.clientY - swipeStartY.current);
+    swipeStartX.current = null;
+    swipeStartY.current = null;
+
+    if (dy < 60) {
+      if (!drawerOpen && swipeStartX.current === null && dx > 75 && e.changedTouches[0].clientX - dx < 55) {
+        setDrawerOpen(true);
+      } else if (drawerOpen && dx < -70) {
+        setDrawerOpen(false);
+      }
+    }
+  };
 
   // Modal de nuevo movimiento
   const [showTxModal, setShowTxModal] = useState(false);
@@ -97,7 +202,7 @@ export default function App() {
   const [txAmount, setTxAmount] = useState('');
   const [txAccount, setTxAccount] = useState('');
   const [txCategoryName, setTxCategoryName] = useState('');
-  const [txCategoryIcon, setTxCategoryIcon] = useState('');
+  const [txCategoryIcon, setTxCategoryIcon] = useState('none');
   const [txNote, setTxNote] = useState('');
   const [txError, setTxError] = useState('');
 
@@ -120,14 +225,18 @@ export default function App() {
   const [newAccName, setNewAccName] = useState('');
   const [newAccBalance, setNewAccBalance] = useState('');
   const [newCatName, setNewCatName] = useState('');
-  const [newCatIcon, setNewCatIcon] = useState('');
+  const [newCatIcon, setNewCatIcon] = useState('none');
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
   const [configNotice, setConfigNotice] = useState('');
 
   // Confirmación de borrado de categorías
   const [catToDelete, setCatToDelete] = useState(null);
-  const [showReenablePrompt, setShowReenablePrompt] = useState(false);
+  const [showReenableCatPrompt, setShowReenableCatPrompt] = useState(false);
+
+  // Confirmación de borrado de cuentas
+  const [accToDelete, setAccToDelete] = useState(null);
+  const [showReenableAccPrompt, setShowReenableAccPrompt] = useState(false);
 
   // Inputs y reordenamiento de Deseos
   const [wishName, setWishName] = useState('');
@@ -186,6 +295,13 @@ export default function App() {
     setOpenStats((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
+  const goToAddCategory = () => {
+    setShowTxModal(false);
+    setDrawerOpen(false);
+    setActiveTab('config');
+    setOpenSections((s) => ({ ...s, categorias: true }));
+  };
+
   // --- Cuentas ---
   const handleAddAccount = (e) => {
     e.preventDefault();
@@ -209,11 +325,25 @@ export default function App() {
     }));
   };
 
-  const handleDeleteAccount = (id) => {
+  const requestDeleteAccount = (acc) => {
+    if (data.skipAccountDeleteConfirm) {
+      setData((prev) => ({
+        ...prev,
+        accounts: prev.accounts.filter((a) => a.id !== acc.id),
+      }));
+    } else {
+      setAccToDelete(acc);
+    }
+  };
+
+  const confirmDeleteAccount = (disableFutureConfirm = false) => {
+    if (!accToDelete) return;
     setData((prev) => ({
       ...prev,
-      accounts: prev.accounts.filter((a) => a.id !== id),
+      accounts: prev.accounts.filter((a) => a.id !== accToDelete.id),
+      skipAccountDeleteConfirm: disableFutureConfirm ? true : prev.skipAccountDeleteConfirm,
     }));
+    setAccToDelete(null);
   };
 
   // --- Categorías ---
@@ -223,11 +353,11 @@ export default function App() {
     const created = {
       id: Date.now().toString(),
       name: newCatName.trim(),
-      icon: newCatIcon || '',
+      icon: newCatIcon || 'none',
     };
     setData((prev) => ({ ...prev, categories: [...prev.categories, created] }));
     setNewCatName('');
-    setNewCatIcon('');
+    setNewCatIcon('none');
   };
 
   const requestDeleteCategory = (cat) => {
@@ -279,7 +409,7 @@ export default function App() {
     setTxAmount('');
     setTxAccount(data.accounts[0]?.id || '');
     setTxCategoryName('');
-    setTxCategoryIcon('');
+    setTxCategoryIcon('none');
     setTxNote('');
     setTxError('');
     setShowTxModal(true);
@@ -313,7 +443,7 @@ export default function App() {
       accountId: accountObj?.id || '',
       accountName: accountObj?.name || 'Sin cuenta',
       categoryName: txCategoryName.trim() || 'General',
-      categoryIcon: txCategoryIcon || '',
+      categoryIcon: txCategoryIcon || 'none',
       note: txNote.trim(),
       date: new Date().toISOString(),
     };
@@ -383,7 +513,7 @@ export default function App() {
       .map(
         (t) => `
         <tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryIcon ? `${t.categoryIcon} ` : ''}${t.categoryName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryName}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.accountName}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.type === 'ingreso' ? 'Ingreso' : 'Gasto'}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">${formatCOP(t.amount)}</td>
@@ -507,12 +637,12 @@ export default function App() {
     () =>
       isDark
         ? {
-            bg: '#050608',
-            headerBg: '#050608',
-            card: 'linear-gradient(180deg, #16191f 0%, #0b0d10 100%)',
+            bg: '#040507',
+            headerBg: '#040507',
+            card: 'linear-gradient(180deg, #16191f 0%, #090b0e 100%)',
             availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
-            cardSolid: '#0e1014',
-            cardSubtle: '#13161c',
+            cardSolid: '#0c0e12',
+            cardSubtle: '#12151b',
             border: 'rgba(255, 255, 255, 0.11)',
             borderStrong: 'rgba(255, 255, 255, 0.28)',
             textPrimary: '#FFFFFF',
@@ -520,12 +650,12 @@ export default function App() {
             textMuted: '#828B99',
             silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CFD6E0 100%)',
             accentBlue: '#2563EB',
-            accentBlueSoft: 'rgba(37, 99, 235, 0.16)',
+            accentBlueSoft: 'rgba(37, 99, 235, 0.18)',
             accentBlueText: '#60A5FA',
             iconCircleBg: '#252C38',
             iconCircleColor: '#FFFFFF',
-            inputBg: '#090B0E',
-            navBg: '#080A0D',
+            inputBg: '#080A0D',
+            navBg: '#06080B',
             danger: '#F87171',
             dangerBg: 'rgba(239, 68, 68, 0.14)',
             success: '#34D399',
@@ -545,7 +675,7 @@ export default function App() {
             textMuted: '#64748B',
             silverGradient: 'linear-gradient(180deg, #0B0D11 0%, #334155 100%)',
             accentBlue: '#2563EB',
-            accentBlueSoft: 'rgba(37, 99, 235, 0.1)',
+            accentBlueSoft: 'rgba(37, 99, 235, 0.12)',
             accentBlueText: '#2563EB',
             iconCircleBg: '#0B0D11',
             iconCircleColor: '#FFFFFF',
@@ -640,6 +770,8 @@ export default function App() {
 
   return (
     <div
+      onTouchStart={handleScreenTouchStart}
+      onTouchEnd={handleScreenTouchEnd}
       style={{
         minHeight: '100dvh',
         backgroundColor: theme.bg,
@@ -649,7 +781,97 @@ export default function App() {
         transition: 'background-color 0.25s ease, color 0.25s ease',
       }}
     >
-      {/* Header superior con margen seguro para iPhone */}
+      {/* Menú lateral deslizable (Principal y Configuración) */}
+      {drawerOpen && (
+        <div
+          onClick={() => setDrawerOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 70,
+            backgroundColor: 'rgba(0, 0, 0, 0.72)',
+            display: 'flex',
+          }}
+        >
+          <aside
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '260px',
+              maxWidth: '78vw',
+              height: '100%',
+              backgroundColor: theme.cardSolid,
+              borderRight: `1px solid ${theme.borderStrong}`,
+              paddingTop: 'calc(26px + env(safe-area-inset-top))',
+              paddingRight: '18px',
+              paddingBottom: '24px',
+              paddingLeft: '18px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <img
+                  src="/logo.png"
+                  alt="ArtPay"
+                  style={{ width: '34px', height: '34px', borderRadius: '10px', objectFit: 'cover' }}
+                />
+                <span style={{ fontSize: '17px', fontWeight: 800 }}>ArtPay</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {[
+              { id: 'inicio', label: 'Principal' },
+              { id: 'estadisticas', label: 'Estadísticas' },
+              { id: 'deseos', label: 'Deseos' },
+              { id: 'config', label: 'Configuración' },
+            ].map((item) => {
+              const isCurrent = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(item.id);
+                    setDrawerOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    borderRadius: '12px',
+                    border: isCurrent ? `1px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                    backgroundColor: isCurrent ? theme.accentBlueSoft : theme.cardSubtle,
+                    color: isCurrent ? theme.accentBlueText : theme.textPrimary,
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </aside>
+        </div>
+      )}
+
+      {/* Header superior bajado y sin desvanecido blanco */}
       <header
         style={{
           position: 'sticky',
@@ -657,7 +879,7 @@ export default function App() {
           zIndex: 20,
           backgroundColor: theme.headerBg,
           borderBottom: `1px solid ${theme.border}`,
-          paddingTop: 'calc(14px + env(safe-area-inset-top))',
+          paddingTop: 'calc(24px + env(safe-area-inset-top))',
           paddingRight: '18px',
           paddingBottom: '14px',
           paddingLeft: '18px',
@@ -673,18 +895,34 @@ export default function App() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
-            <img
-              src="/logo.png"
-              alt="ArtPay"
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              title="Abrir menú"
               style={{
+                padding: 0,
+                border: '1px solid rgba(255,255,255,0.22)',
+                borderRadius: '11px',
+                background: 'none',
                 width: '38px',
                 height: '38px',
-                borderRadius: '11px',
-                objectFit: 'cover',
-                border: '1px solid rgba(255,255,255,0.18)',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.45)',
+                overflow: 'hidden',
+                cursor: 'pointer',
+                flexShrink: 0,
               }}
-            />
+            >
+              <img
+                src="/logo.png"
+                alt="ArtPay"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  display: 'block',
+                }}
+              />
+            </button>
+
             <div>
               <div style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '-0.4px' }}>
                 ArtPay
@@ -992,7 +1230,9 @@ export default function App() {
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                        {tx.categoryIcon ? <span style={{ fontSize: '18px' }}>{tx.categoryIcon}</span> : null}
+                        {tx.categoryIcon && tx.categoryIcon !== 'none' ? (
+                          <CategoryGlyph iconId={tx.categoryIcon} size={18} color={theme.textSecondary} />
+                        ) : null}
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
                             {tx.categoryName}
@@ -1530,9 +1770,9 @@ export default function App() {
                       style={{
                         padding: '10px',
                         borderRadius: '10px',
-                        border: `1px solid ${theme.borderStrong}`,
-                        backgroundColor: theme.cardSubtle,
-                        color: theme.textPrimary,
+                        border: `1.5px solid ${theme.accentBlue}`,
+                        backgroundColor: theme.accentBlueSoft,
+                        color: theme.accentBlueText,
                         fontSize: '12px',
                         fontWeight: 700,
                         cursor: 'pointer',
@@ -1546,9 +1786,9 @@ export default function App() {
                       style={{
                         padding: '10px',
                         borderRadius: '10px',
-                        border: `1px solid ${theme.borderStrong}`,
-                        backgroundColor: theme.cardSubtle,
-                        color: theme.textPrimary,
+                        border: `1.5px solid ${theme.accentBlue}`,
+                        backgroundColor: theme.accentBlueSoft,
+                        color: theme.accentBlueText,
                         fontSize: '12px',
                         fontWeight: 700,
                         cursor: 'pointer',
@@ -1720,7 +1960,7 @@ export default function App() {
                             />
                             <button
                               type="button"
-                              onClick={() => handleDeleteAccount(acc.id)}
+                              onClick={() => requestDeleteAccount(acc)}
                               style={{
                                 background: 'none',
                                 border: 'none',
@@ -1735,6 +1975,26 @@ export default function App() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {data.skipAccountDeleteConfirm && (
+                    <div style={{ paddingTop: '2px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowReenableAccPrompt(true)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          color: theme.accentBlueText,
+                          fontSize: '12px',
+                          textDecoration: 'underline',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Volver a preguntar
+                      </button>
                     </div>
                   )}
 
@@ -1777,7 +2037,7 @@ export default function App() {
               )}
             </section>
 
-            {/* 4. CATEGORÍAS */}
+            {/* 4. CATEGORÍAS (íconos propios SVG) */}
             <section
               style={{
                 background: theme.card,
@@ -1821,7 +2081,7 @@ export default function App() {
                         borderRadius: '10px',
                       }}
                     >
-                      Agrega una categoría. Elegir un emoji es opcional (puedes dejar <strong>✕</strong> sin emoji).
+                      Agrega una categoría. Elegir un ícono es opcional (puedes dejar <strong>✕</strong> sin ícono).
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -1839,7 +2099,9 @@ export default function App() {
                             fontSize: '13px',
                           }}
                         >
-                          {cat.icon ? <span>{cat.icon}</span> : null}
+                          {cat.icon && cat.icon !== 'none' ? (
+                            <CategoryGlyph iconId={cat.icon} size={14} color={theme.textSecondary} />
+                          ) : null}
                           <span>{cat.name}</span>
                           <button
                             type="button"
@@ -1864,7 +2126,7 @@ export default function App() {
                     <div style={{ paddingTop: '2px' }}>
                       <button
                         type="button"
-                        onClick={() => setShowReenablePrompt(true)}
+                        onClick={() => setShowReenableCatPrompt(true)}
                         style={{
                           background: 'none',
                           border: 'none',
@@ -1882,22 +2144,22 @@ export default function App() {
 
                   <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {CATEGORY_ICONS.map((ic) => {
-                        const active = newCatIcon === ic.symbol;
+                      {ICON_OPTIONS.map((ic) => {
+                        const active = newCatIcon === ic.id;
                         return (
                           <button
                             key={ic.id}
                             type="button"
                             title={ic.label}
-                            onClick={() => setNewCatIcon(ic.symbol)}
+                            onClick={() => setNewCatIcon(ic.id)}
                             style={{
                               width: '34px',
                               height: '34px',
                               borderRadius: '10px',
                               border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
                               backgroundColor: active ? theme.accentBlueSoft : theme.inputBg,
-                              color: ic.symbol ? theme.textPrimary : theme.textMuted,
-                              fontSize: ic.symbol ? '16px' : '12px',
+                              color: active ? theme.accentBlueText : theme.textSecondary,
+                              fontSize: '12px',
                               fontWeight: 700,
                               cursor: 'pointer',
                               display: 'flex',
@@ -1905,7 +2167,7 @@ export default function App() {
                               justifyContent: 'center',
                             }}
                           >
-                            {ic.symbol || '✕'}
+                            {ic.id === 'none' ? '✕' : <CategoryGlyph iconId={ic.id} size={16} color="currentColor" />}
                           </button>
                         );
                       })}
@@ -2221,51 +2483,64 @@ export default function App() {
               </div>
             )}
 
+            {/* Categorías agregadas + botón Agregar categoría (sin input de texto aquí) */}
             <div>
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
                 Categoría
               </div>
-              {data.categories.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
-                  {data.categories.map((cat) => {
-                    const selected = txCategoryName === cat.name;
-                    return (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => {
-                          setTxCategoryName(selected ? '' : cat.name);
-                          setTxCategoryIcon(selected ? '' : cat.icon || '');
-                        }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '7px 12px',
-                          borderRadius: '999px',
-                          border: selected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
-                          backgroundColor: selected ? theme.accentBlueSoft : theme.cardSubtle,
-                          color: selected ? theme.accentBlueText : theme.textPrimary,
-                          fontSize: '13px',
-                          fontWeight: selected ? 700 : 500,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {cat.icon ? <span>{cat.icon}</span> : null}
-                        <span>{cat.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {data.categories.map((cat) => {
+                  const selected = txCategoryName === cat.name;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => {
+                        setTxCategoryName(selected ? '' : cat.name);
+                        setTxCategoryIcon(selected ? 'none' : cat.icon || 'none');
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '7px 12px',
+                        borderRadius: '999px',
+                        border: selected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                        backgroundColor: selected ? theme.accentBlueSoft : theme.cardSubtle,
+                        color: selected ? theme.accentBlueText : theme.textPrimary,
+                        fontSize: '13px',
+                        fontWeight: selected ? 700 : 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {cat.icon && cat.icon !== 'none' ? (
+                        <CategoryGlyph iconId={cat.icon} size={14} color="currentColor" />
+                      ) : null}
+                      <span>{cat.name}</span>
+                    </button>
+                  );
+                })}
 
-              <input
-                type="text"
-                placeholder="O escribe una categoría (Ej: Comida)"
-                value={txCategoryName}
-                onChange={(e) => setTxCategoryName(e.target.value)}
-                style={{ ...baseInputStyle, fontSize: '13px', padding: '10px 12px' }}
-              />
+                <button
+                  type="button"
+                  onClick={goToAddCategory}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '7px 12px',
+                    borderRadius: '999px',
+                    border: `1px dashed ${theme.accentBlueText}`,
+                    backgroundColor: 'transparent',
+                    color: theme.accentBlueText,
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  + Agregar categoría
+                </button>
+              </div>
             </div>
 
             <input
@@ -2381,8 +2656,8 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= MODAL VOLVER A PREGUNTAR ================= */}
-      {showReenablePrompt && (
+      {/* ================= MODAL VOLVER A PREGUNTAR CATEGORÍAS ================= */}
+      {showReenableCatPrompt && (
         <div
           style={{
             position: 'fixed',
@@ -2407,12 +2682,12 @@ export default function App() {
             }}
           >
             <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>
-              ¿Quieres que te vuelva a preguntar cada vez que vayas a eliminar algo?
+              ¿Quieres que te vuelva a preguntar cada vez que vayas a eliminar una categoría?
             </div>
             <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
               <button
                 type="button"
-                onClick={() => setShowReenablePrompt(false)}
+                onClick={() => setShowReenableCatPrompt(false)}
                 style={{
                   flex: 1,
                   padding: '11px',
@@ -2430,7 +2705,161 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setData((prev) => ({ ...prev, skipCategoryDeleteConfirm: false }));
-                  setShowReenablePrompt(false);
+                  setShowReenableCatPrompt(false);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.accentBlue,
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL CONFIRMAR BORRAR CUENTA ================= */}
+      {accToDelete && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '340px',
+              backgroundColor: theme.cardSolid,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '20px',
+              padding: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+              ¿Seguro que quieres borrar "{accToDelete.name}"?
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
+              Esta cuenta se quitará de tu lista.
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <button
+                type="button"
+                onClick={() => setAccToDelete(null)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.cardSubtle,
+                  color: theme.textPrimary,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => confirmDeleteAccount(false)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.danger,
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí, borrar
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => confirmDeleteAccount(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: theme.textSecondary,
+                fontSize: '12px',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+              }}
+            >
+              No volver a preguntar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL VOLVER A PREGUNTAR CUENTAS ================= */}
+      {showReenableAccPrompt && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '340px',
+              backgroundColor: theme.cardSolid,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '20px',
+              padding: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>
+              ¿Quieres que te vuelva a preguntar cada vez que vayas a eliminar una cuenta?
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+              <button
+                type="button"
+                onClick={() => setShowReenableAccPrompt(false)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.cardSubtle,
+                  color: theme.textPrimary,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setData((prev) => ({ ...prev, skipAccountDeleteConfirm: false }));
+                  setShowReenableAccPrompt(false);
                 }}
                 style={{
                   flex: 1,
