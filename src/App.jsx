@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v7';
+const STORAGE_KEY = 'artpay_data_v8';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -622,9 +622,14 @@ export default function App() {
             bg: '#040507',
             headerBg: '#040507',
             card: 'linear-gradient(180deg, #16191f 0%, #090b0e 100%)',
-            availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
-            availableBorder: 'rgba(226, 232, 240, 0.52)',
-            availableShadow: '0 14px 34px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(203, 213, 225, 0.22)',
+            // En modo oscuro: aún más claro y plateado
+            availableCard: 'linear-gradient(180deg, #434C5E 0%, #252B37 100%)',
+            availableBorder: 'rgba(241, 245, 249, 0.72)',
+            availableShadow: '0 14px 34px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(226, 232, 240, 0.35)',
+            availableLabelColor: '#E2E8F0',
+            availableSubCardBg: 'rgba(15, 19, 26, 0.68)',
+            availableSubCardBorder: 'rgba(226, 232, 240, 0.22)',
+            availableMutedColor: '#CBD5E1',
             cardSolid: '#0c0e12',
             cardSubtle: '#12151b',
             border: 'rgba(255, 255, 255, 0.11)',
@@ -632,13 +637,13 @@ export default function App() {
             textPrimary: '#FFFFFF',
             textSecondary: '#C2C9D4',
             textMuted: '#828B99',
-            silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CBD5E1 100%)',
+            silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #E2E8F0 55%, #94A3B8 100%)',
             accentBlue: '#2563EB',
             accentBlueSoft: 'rgba(37, 99, 235, 0.18)',
             accentBlueText: '#60A5FA',
-            iconCircleBg: 'linear-gradient(145deg, #E2E8F0 0%, #94A3B8 100%)',
+            iconCircleBg: 'linear-gradient(145deg, #F1F5F9 0%, #94A3B8 100%)',
             iconCircleColor: '#090B0E',
-            iconCircleBorder: '1.5px solid rgba(255, 255, 255, 0.75)',
+            iconCircleBorder: '1.5px solid #FFFFFF',
             inputBg: '#080A0D',
             navBg: '#06080B',
             danger: '#F87171',
@@ -650,9 +655,14 @@ export default function App() {
             bg: '#F4F6F9',
             headerBg: '#F4F6F9',
             card: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-            availableCard: 'linear-gradient(180deg, #FFFFFF 0%, #F1F5F9 100%)',
-            availableBorder: 'rgba(15, 23, 42, 0.22)',
-            availableShadow: '0 8px 24px rgba(15, 23, 42, 0.08)',
+            // En modo claro: cuadro principal de Plata disponible oscuro / negro con toque plateado
+            availableCard: 'linear-gradient(180deg, #1E232C 0%, #090B0F 100%)',
+            availableBorder: 'rgba(148, 163, 184, 0.55)',
+            availableShadow: '0 12px 28px rgba(15, 23, 42, 0.22)',
+            availableLabelColor: '#CBD5E1',
+            availableSubCardBg: 'rgba(255, 255, 255, 0.06)',
+            availableSubCardBorder: 'rgba(226, 232, 240, 0.14)',
+            availableMutedColor: '#94A3B8',
             cardSolid: '#FFFFFF',
             cardSubtle: '#EEF2F6',
             border: 'rgba(15, 23, 42, 0.09)',
@@ -660,7 +670,7 @@ export default function App() {
             textPrimary: '#0B0D11',
             textSecondary: '#475569',
             textMuted: '#64748B',
-            silverGradient: 'linear-gradient(180deg, #0B0D11 0%, #334155 100%)',
+            silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CBD5E1 65%, #94A3B8 100%)',
             accentBlue: '#2563EB',
             accentBlueSoft: 'rgba(37, 99, 235, 0.12)',
             accentBlueText: '#2563EB',
@@ -900,7 +910,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Header superior bajado aún más para separar bien de la barra superior */}
+      {/* Header superior */}
       <header
         style={{
           position: 'sticky',
@@ -1012,7 +1022,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Contenedor principal con animación estilo iPhone al cambiar de pestaña */}
+      {/* Contenedor principal */}
       <main
         key={activeTab}
         className="ios-screen-enter"
@@ -1021,6 +1031,7 @@ export default function App() {
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {/* Cuadro Principal: Plata disponible (oscuro en modo claro, más claro y plateado en modo oscuro) */}
             <section
               style={{
                 background: theme.availableCard,
@@ -1057,7 +1068,7 @@ export default function App() {
                       fontSize: '11px',
                       fontWeight: 700,
                       letterSpacing: '0.8px',
-                      color: theme.textSecondary,
+                      color: theme.availableLabelColor,
                       textTransform: 'uppercase',
                     }}
                   >
@@ -1069,8 +1080,8 @@ export default function App() {
                   style={{
                     fontSize: '12px',
                     fontWeight: 600,
-                    color: theme.accentBlueText,
-                    backgroundColor: theme.accentBlueSoft,
+                    color: '#93C5FD',
+                    backgroundColor: 'rgba(37, 99, 235, 0.24)',
                     padding: '4px 10px',
                     borderRadius: '999px',
                   }}
@@ -1098,7 +1109,7 @@ export default function App() {
                   fontSize: '11px',
                   fontWeight: 700,
                   letterSpacing: '0.7px',
-                  color: theme.textMuted,
+                  color: theme.availableMutedColor,
                   marginBottom: '8px',
                 }}
               >
@@ -1107,8 +1118,8 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div
                   style={{
-                    backgroundColor: theme.cardSubtle,
-                    border: `1px solid ${theme.border}`,
+                    backgroundColor: theme.availableSubCardBg,
+                    border: `1px solid ${theme.availableSubCardBorder}`,
                     borderRadius: '14px',
                     padding: '12px',
                     display: 'flex',
@@ -1135,10 +1146,10 @@ export default function App() {
                     +
                   </div>
                   <div>
-                    <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '2px' }}>
+                    <div style={{ fontSize: '12px', color: theme.availableLabelColor, marginBottom: '2px' }}>
                       Ingresos
                     </div>
-                    <div style={{ fontSize: '15px', fontWeight: 700, color: theme.success }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#34D399' }}>
                       +{renderMoney(todayIncome)}
                     </div>
                   </div>
@@ -1146,8 +1157,8 @@ export default function App() {
 
                 <div
                   style={{
-                    backgroundColor: theme.cardSubtle,
-                    border: `1px solid ${theme.border}`,
+                    backgroundColor: theme.availableSubCardBg,
+                    border: `1px solid ${theme.availableSubCardBorder}`,
                     borderRadius: '14px',
                     padding: '12px',
                     display: 'flex',
@@ -1174,10 +1185,10 @@ export default function App() {
                     -
                   </div>
                   <div>
-                    <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '2px' }}>
+                    <div style={{ fontSize: '12px', color: theme.availableLabelColor, marginBottom: '2px' }}>
                       Gastos
                     </div>
-                    <div style={{ fontSize: '15px', fontWeight: 700, color: theme.danger }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#F87171' }}>
                       -{renderMoney(todayExpense)}
                     </div>
                   </div>
@@ -2129,7 +2140,7 @@ export default function App() {
               )}
             </section>
 
-            {/* 4. CATEGORÍAS (íconos propios SVG) */}
+            {/* 4. CATEGORÍAS */}
             <section
               style={{
                 background: theme.card,
@@ -2579,7 +2590,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Categorías agregadas + botón Agregar categoría (sin input de texto aquí) */}
+            {/* Categorías agregadas + botón Agregar categoría */}
             <div>
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
                 Categoría
