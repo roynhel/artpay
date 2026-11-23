@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v6';
+const STORAGE_KEY = 'artpay_data_v7';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -16,18 +16,17 @@ const DEFAULT_DATA = {
 
 const ICON_OPTIONS = [
   { id: 'none', label: 'Sin ícono' },
-  { id: 'tag', label: 'Etiqueta' },
   { id: 'car', label: 'Carro' },
-  { id: 'key', label: 'Llave / Carro' },
-  { id: 'food', label: 'Comida' },
-  { id: 'money', label: 'Dinero / Trabajo' },
-  { id: 'home', label: 'Hogar' },
-  { id: 'phone', label: 'Celular' },
-  { id: 'gift', label: 'Regalo / Extra' },
+  { id: 'food', label: 'Comida / Almuerzo' },
+  { id: 'home', label: 'Casa' },
+  { id: 'phone', label: 'Teléfono' },
+  { id: 'gift', label: 'Regalo' },
 ];
 
+const ALLOWED_ICON_IDS = new Set(ICON_OPTIONS.map((i) => i.id));
+
 const CategoryGlyph = ({ iconId, size = 16, color = 'currentColor' }) => {
-  if (!iconId || iconId === 'none') return null;
+  if (!iconId || iconId === 'none' || !ALLOWED_ICON_IDS.has(iconId)) return null;
 
   switch (iconId) {
     case 'car':
@@ -39,15 +38,6 @@ const CategoryGlyph = ({ iconId, size = 16, color = 'currentColor' }) => {
           <path d="M5 12h14" />
         </svg>
       );
-    case 'key':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="7.5" cy="15.5" r="4.5" />
-          <path d="M10.85 12.15L21 2" />
-          <path d="M18 5l3 3" />
-          <path d="M15 8l3 3" />
-        </svg>
-      );
     case 'food':
       return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -55,14 +45,6 @@ const CategoryGlyph = ({ iconId, size = 16, color = 'currentColor' }) => {
           <path d="M4 2v6a3 3 0 0 0 6 0V2" />
           <path d="M17 2v20" />
           <path d="M17 2c2.5 0 4 2 4 5s-1.5 5-4 5" />
-        </svg>
-      );
-    case 'money':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="2" y="6" width="20" height="12" rx="2" />
-          <circle cx="12" cy="12" r="2.5" />
-          <path d="M6 12h.01M18 12h.01" />
         </svg>
       );
     case 'home':
@@ -81,6 +63,7 @@ const CategoryGlyph = ({ iconId, size = 16, color = 'currentColor' }) => {
         </svg>
       );
     case 'gift':
+    default:
       return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="8" width="18" height="4" rx="1" />
@@ -88,14 +71,6 @@ const CategoryGlyph = ({ iconId, size = 16, color = 'currentColor' }) => {
           <path d="M19 12v9H5v-9" />
           <path d="M12 8c0-2.5-2-4-4-4s-3 1.2-3 2.5S6.5 8 12 8z" />
           <path d="M12 8c0-2.5 2-4 4-4s3 1.2 3 2.5S17.5 8 12 8z" />
-        </svg>
-      );
-    case 'tag':
-    default:
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-          <circle cx="7" cy="7" r="1.5" />
         </svg>
       );
   }
@@ -133,8 +108,7 @@ export default function App() {
           categories: Array.isArray(parsed.categories)
             ? parsed.categories.map((c) => {
                 if (typeof c === 'string') return { id: c, name: c, icon: 'none' };
-                const validIds = new Set(ICON_OPTIONS.map((i) => i.id));
-                const iconId = validIds.has(c.icon) ? c.icon : 'none';
+                const iconId = ALLOWED_ICON_IDS.has(c.icon) ? c.icon : 'none';
                 return { id: c.id || String(Date.now()), name: c.name, icon: iconId };
               })
             : [],
@@ -184,11 +158,12 @@ export default function App() {
     const t = e.changedTouches[0];
     const dx = t.clientX - swipeStartX.current;
     const dy = Math.abs(t.clientY - swipeStartY.current);
+    const startX = swipeStartX.current;
     swipeStartX.current = null;
     swipeStartY.current = null;
 
     if (dy < 60) {
-      if (!drawerOpen && swipeStartX.current === null && dx > 75 && e.changedTouches[0].clientX - dx < 55) {
+      if (!drawerOpen && dx > 75 && startX < 65) {
         setDrawerOpen(true);
       } else if (drawerOpen && dx < -70) {
         setDrawerOpen(false);
@@ -261,10 +236,15 @@ export default function App() {
   const isDark = data.theme === 'system' ? systemPrefersDark : data.theme === 'dark';
 
   useEffect(() => {
+    const rootBg = isDark ? '#040507' : '#F4F6F9';
+    document.documentElement.style.backgroundColor = rootBg;
+    document.body.style.backgroundColor = rootBg;
+    document.body.style.margin = '0';
+
     const themeMeta = document.getElementById('theme-color-meta');
     const appleMeta = document.getElementById('apple-status-bar-meta');
     if (themeMeta) {
-      themeMeta.setAttribute('content', isDark ? '#050608' : '#F4F6F9');
+      themeMeta.setAttribute('content', rootBg);
     }
     if (appleMeta) {
       appleMeta.setAttribute('content', isDark ? 'black-translucent' : 'default');
@@ -353,7 +333,7 @@ export default function App() {
     const created = {
       id: Date.now().toString(),
       name: newCatName.trim(),
-      icon: newCatIcon || 'none',
+      icon: ALLOWED_ICON_IDS.has(newCatIcon) ? newCatIcon : 'none',
     };
     setData((prev) => ({ ...prev, categories: [...prev.categories, created] }));
     setNewCatName('');
@@ -443,7 +423,7 @@ export default function App() {
       accountId: accountObj?.id || '',
       accountName: accountObj?.name || 'Sin cuenta',
       categoryName: txCategoryName.trim() || 'General',
-      categoryIcon: txCategoryIcon || 'none',
+      categoryIcon: ALLOWED_ICON_IDS.has(txCategoryIcon) ? txCategoryIcon : 'none',
       note: txNote.trim(),
       date: new Date().toISOString(),
     };
@@ -633,6 +613,8 @@ export default function App() {
     setDragOverIndex(null);
   };
 
+  const iosEase = 'cubic-bezier(0.22, 1, 0.36, 1)';
+
   const theme = useMemo(
     () =>
       isDark
@@ -641,6 +623,8 @@ export default function App() {
             headerBg: '#040507',
             card: 'linear-gradient(180deg, #16191f 0%, #090b0e 100%)',
             availableCard: 'linear-gradient(180deg, #323946 0%, #1B202A 100%)',
+            availableBorder: 'rgba(226, 232, 240, 0.52)',
+            availableShadow: '0 14px 34px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(203, 213, 225, 0.22)',
             cardSolid: '#0c0e12',
             cardSubtle: '#12151b',
             border: 'rgba(255, 255, 255, 0.11)',
@@ -648,12 +632,13 @@ export default function App() {
             textPrimary: '#FFFFFF',
             textSecondary: '#C2C9D4',
             textMuted: '#828B99',
-            silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CFD6E0 100%)',
+            silverGradient: 'linear-gradient(180deg, #FFFFFF 0%, #CBD5E1 100%)',
             accentBlue: '#2563EB',
             accentBlueSoft: 'rgba(37, 99, 235, 0.18)',
             accentBlueText: '#60A5FA',
-            iconCircleBg: '#252C38',
-            iconCircleColor: '#FFFFFF',
+            iconCircleBg: 'linear-gradient(145deg, #E2E8F0 0%, #94A3B8 100%)',
+            iconCircleColor: '#090B0E',
+            iconCircleBorder: '1.5px solid rgba(255, 255, 255, 0.75)',
             inputBg: '#080A0D',
             navBg: '#06080B',
             danger: '#F87171',
@@ -666,6 +651,8 @@ export default function App() {
             headerBg: '#F4F6F9',
             card: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
             availableCard: 'linear-gradient(180deg, #FFFFFF 0%, #F1F5F9 100%)',
+            availableBorder: 'rgba(15, 23, 42, 0.22)',
+            availableShadow: '0 8px 24px rgba(15, 23, 42, 0.08)',
             cardSolid: '#FFFFFF',
             cardSubtle: '#EEF2F6',
             border: 'rgba(15, 23, 42, 0.09)',
@@ -677,8 +664,9 @@ export default function App() {
             accentBlue: '#2563EB',
             accentBlueSoft: 'rgba(37, 99, 235, 0.12)',
             accentBlueText: '#2563EB',
-            iconCircleBg: '#0B0D11',
-            iconCircleColor: '#FFFFFF',
+            iconCircleBg: 'linear-gradient(160deg, #272B33 0%, #090B0E 100%)',
+            iconCircleColor: '#E2E8F0',
+            iconCircleBorder: '1.5px solid #94A3B8',
             inputBg: '#F8FAFC',
             navBg: '#FFFFFF',
             danger: '#DC2626',
@@ -700,6 +688,7 @@ export default function App() {
     color: theme.textPrimary,
     fontSize: '13px',
     outline: 'none',
+    transition: `border-color 0.2s ${iosEase}, background-color 0.25s ${iosEase}`,
   };
 
   const renderMoney = (val) => (hideBalances ? '••••••' : formatCOP(val));
@@ -778,9 +767,47 @@ export default function App() {
         color: theme.textPrimary,
         fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif',
         paddingBottom: '94px',
-        transition: 'background-color 0.25s ease, color 0.25s ease',
+        transition: `background-color 0.32s ${iosEase}, color 0.32s ${iosEase}`,
       }}
     >
+      <style>{`
+        @keyframes iosTabEnter {
+          from {
+            opacity: 0;
+            transform: translateY(12px) scale(0.99);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes iosDrawerSlide {
+          from {
+            transform: translateX(-100%);
+          }
+          to {
+            transform: translateX(0);
+          }
+        }
+        @keyframes iosSheetSlide {
+          from {
+            transform: translateY(100%);
+          }
+          to {
+            transform: translateY(0);
+          }
+        }
+        .ios-screen-enter {
+          animation: iosTabEnter 0.36s ${iosEase};
+        }
+        .ios-drawer-enter {
+          animation: iosDrawerSlide 0.34s ${iosEase};
+        }
+        .ios-sheet-enter {
+          animation: iosSheetSlide 0.36s ${iosEase};
+        }
+      `}</style>
+
       {/* Menú lateral deslizable (Principal y Configuración) */}
       {drawerOpen && (
         <div
@@ -794,6 +821,7 @@ export default function App() {
           }}
         >
           <aside
+            className="ios-drawer-enter"
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '260px',
@@ -801,7 +829,7 @@ export default function App() {
               height: '100%',
               backgroundColor: theme.cardSolid,
               borderRight: `1px solid ${theme.borderStrong}`,
-              paddingTop: 'calc(26px + env(safe-area-inset-top))',
+              paddingTop: 'calc(34px + env(safe-area-inset-top))',
               paddingRight: '18px',
               paddingBottom: '24px',
               paddingLeft: '18px',
@@ -861,6 +889,7 @@ export default function App() {
                     fontSize: '14px',
                     fontWeight: 700,
                     cursor: 'pointer',
+                    transition: `all 0.22s ${iosEase}`,
                   }}
                 >
                   {item.label}
@@ -871,7 +900,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Header superior bajado y sin desvanecido blanco */}
+      {/* Header superior bajado aún más para separar bien de la barra superior */}
       <header
         style={{
           position: 'sticky',
@@ -879,10 +908,11 @@ export default function App() {
           zIndex: 20,
           backgroundColor: theme.headerBg,
           borderBottom: `1px solid ${theme.border}`,
-          paddingTop: 'calc(24px + env(safe-area-inset-top))',
+          paddingTop: 'calc(34px + env(safe-area-inset-top))',
           paddingRight: '18px',
           paddingBottom: '14px',
           paddingLeft: '18px',
+          transition: `background-color 0.32s ${iosEase}, border-color 0.32s ${iosEase}`,
         }}
       >
         <div
@@ -909,6 +939,7 @@ export default function App() {
                 overflow: 'hidden',
                 cursor: 'pointer',
                 flexShrink: 0,
+                transition: `transform 0.2s ${iosEase}`,
               }}
             >
               <img
@@ -963,6 +994,7 @@ export default function App() {
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
+              transition: `transform 0.2s ${iosEase}, background-color 0.25s ${iosEase}`,
             }}
           >
             {hideBalances ? (
@@ -980,33 +1012,39 @@ export default function App() {
         </div>
       </header>
 
-      {/* Contenedor principal */}
-      <main style={{ maxWidth: '480px', margin: '0 auto', padding: '16px' }}>
+      {/* Contenedor principal con animación estilo iPhone al cambiar de pestaña */}
+      <main
+        key={activeTab}
+        className="ios-screen-enter"
+        style={{ maxWidth: '480px', margin: '0 auto', padding: '16px' }}
+      >
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <section
               style={{
                 background: theme.availableCard,
-                border: `1px solid ${theme.borderStrong}`,
+                border: `1.5px solid ${theme.availableBorder}`,
                 borderRadius: '20px',
                 padding: '20px',
-                boxShadow: isDark ? '0 14px 32px rgba(0, 0, 0, 0.55)' : '0 8px 24px rgba(15, 23, 42, 0.06)',
+                boxShadow: theme.availableShadow,
+                transition: `all 0.3s ${iosEase}`,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <div
                     style={{
-                      width: '36px',
-                      height: '36px',
+                      width: '38px',
+                      height: '38px',
                       borderRadius: '50%',
-                      backgroundColor: theme.iconCircleBg,
+                      background: theme.iconCircleBg,
                       color: theme.iconCircleColor,
-                      border: `1px solid ${theme.borderStrong}`,
+                      border: theme.iconCircleBorder,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
+                      transition: `all 0.3s ${iosEase}`,
                     }}
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -1073,13 +1111,36 @@ export default function App() {
                     border: `1px solid ${theme.border}`,
                     borderRadius: '14px',
                     padding: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
                   }}
                 >
-                  <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>
-                    Ingresos
+                  <div
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      background: theme.iconCircleBg,
+                      color: theme.iconCircleColor,
+                      border: theme.iconCircleBorder,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '13px',
+                      fontWeight: 800,
+                      flexShrink: 0,
+                    }}
+                  >
+                    +
                   </div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, color: theme.success }}>
-                    +{renderMoney(todayIncome)}
+                  <div>
+                    <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '2px' }}>
+                      Ingresos
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: theme.success }}>
+                      +{renderMoney(todayIncome)}
+                    </div>
                   </div>
                 </div>
 
@@ -1089,13 +1150,36 @@ export default function App() {
                     border: `1px solid ${theme.border}`,
                     borderRadius: '14px',
                     padding: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
                   }}
                 >
-                  <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>
-                    Gastos
+                  <div
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      background: theme.iconCircleBg,
+                      color: theme.iconCircleColor,
+                      border: theme.iconCircleBorder,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '13px',
+                      fontWeight: 800,
+                      flexShrink: 0,
+                    }}
+                  >
+                    -
                   </div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, color: theme.danger }}>
-                    -{renderMoney(todayExpense)}
+                  <div>
+                    <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '2px' }}>
+                      Gastos
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: theme.danger }}>
+                      -{renderMoney(todayExpense)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1116,6 +1200,7 @@ export default function App() {
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 cursor: 'pointer',
+                transition: `transform 0.2s ${iosEase}, border-color 0.2s ${iosEase}`,
               }}
             >
               <div>
@@ -1144,15 +1229,17 @@ export default function App() {
                 style={{
                   width: '42px',
                   height: '42px',
-                  borderRadius: '12px',
-                  backgroundColor: theme.accentBlueSoft,
-                  color: theme.accentBlueText,
+                  borderRadius: '50%',
+                  background: theme.iconCircleBg,
+                  color: theme.iconCircleColor,
+                  border: theme.iconCircleBorder,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  flexShrink: 0,
                 }}
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <rect x="2" y="5" width="20" height="14" rx="2" />
                   <line x1="2" y1="10" x2="22" y2="10" />
                 </svg>
@@ -1178,6 +1265,7 @@ export default function App() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '8px',
+                transition: `transform 0.2s ${iosEase}, box-shadow 0.2s ${iosEase}`,
               }}
             >
               <span style={{ fontSize: '19px', lineHeight: 1 }}>+</span> Registrar movimiento
@@ -1227,6 +1315,7 @@ export default function App() {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '10px',
+                        transition: `transform 0.22s ${iosEase}`,
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
@@ -1310,6 +1399,7 @@ export default function App() {
                       height: '100%',
                       backgroundColor: theme.success,
                       borderRadius: '999px',
+                      transition: `width 0.45s ${iosEase}`,
                     }}
                   />
                 </div>
@@ -1327,6 +1417,7 @@ export default function App() {
                       height: '100%',
                       backgroundColor: theme.danger,
                       borderRadius: '999px',
+                      transition: `width 0.45s ${iosEase}`,
                     }}
                   />
                 </div>
@@ -1358,13 +1449,13 @@ export default function App() {
                 }}
               >
                 <span style={{ fontSize: '14px', fontWeight: 700 }}>Gasto por categoría</span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                <span style={{ fontSize: '12px', color: theme.textSecondary, transition: `transform 0.25s ${iosEase}` }}>
                   {openStats.gastosCat ? '▲' : '▼'}
                 </span>
               </button>
 
               {openStats.gastosCat && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {Object.keys(expenseByCategory).length === 0 ? (
                     <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin gastos registrados aún.</div>
                   ) : (
@@ -1418,13 +1509,13 @@ export default function App() {
                 }}
               >
                 <span style={{ fontSize: '14px', fontWeight: 700 }}>Ingresos por categoría</span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                <span style={{ fontSize: '12px', color: theme.textSecondary, transition: `transform 0.25s ${iosEase}` }}>
                   {openStats.ingresosCat ? '▲' : '▼'}
                 </span>
               </button>
 
               {openStats.ingresosCat && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {Object.keys(incomeByCategory).length === 0 ? (
                     <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin ingresos registrados aún.</div>
                   ) : (
@@ -1572,7 +1663,7 @@ export default function App() {
                         justifyContent: 'space-between',
                         gap: '10px',
                         opacity: dragIndex === idx ? 0.72 : 1,
-                        transition: 'border-color 0.15s ease',
+                        transition: `transform 0.24s ${iosEase}, border-color 0.2s ${iosEase}`,
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
@@ -1749,7 +1840,7 @@ export default function App() {
               </button>
 
               {openSections.perfil && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div>
                     <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
                       Tu nombre
@@ -1842,7 +1933,7 @@ export default function App() {
               </button>
 
               {openSections.apariencia && (
-                <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                   {[
                     { id: 'dark', label: 'Negro' },
                     { id: 'light', label: 'Claro' },
@@ -1863,6 +1954,7 @@ export default function App() {
                           fontWeight: 700,
                           fontSize: '13px',
                           cursor: 'pointer',
+                          transition: `all 0.22s ${iosEase}`,
                         }}
                       >
                         {opt.label}
@@ -1906,7 +1998,7 @@ export default function App() {
               </button>
 
               {openSections.cuentas && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {data.accounts.length === 0 ? (
                     <div
                       style={{
@@ -2070,7 +2162,7 @@ export default function App() {
               </button>
 
               {openSections.categorias && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {data.categories.length === 0 ? (
                     <div
                       style={{
@@ -2165,6 +2257,7 @@ export default function App() {
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
+                              transition: `all 0.2s ${iosEase}`,
                             }}
                           >
                             {ic.id === 'none' ? '✕' : <CategoryGlyph iconId={ic.id} size={16} color="currentColor" />}
@@ -2234,7 +2327,7 @@ export default function App() {
               </button>
 
               {openSections.deudas && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="ios-screen-enter" style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {data.debts.length === 0 ? (
                     <div
                       style={{
@@ -2366,6 +2459,7 @@ export default function App() {
           }}
         >
           <form
+            className="ios-sheet-enter"
             onSubmit={handleSaveTransaction}
             style={{
               width: '100%',
@@ -2414,6 +2508,7 @@ export default function App() {
                   color: txType === 'gasto' ? theme.danger : theme.textSecondary,
                   fontWeight: 700,
                   cursor: 'pointer',
+                  transition: `all 0.2s ${iosEase}`,
                 }}
               >
                 Gasto
@@ -2432,6 +2527,7 @@ export default function App() {
                   color: txType === 'ingreso' ? theme.success : theme.textSecondary,
                   fontWeight: 700,
                   cursor: 'pointer',
+                  transition: `all 0.2s ${iosEase}`,
                 }}
               >
                 Ingreso
@@ -2511,6 +2607,7 @@ export default function App() {
                         fontSize: '13px',
                         fontWeight: selected ? 700 : 500,
                         cursor: 'pointer',
+                        transition: `all 0.2s ${iosEase}`,
                       }}
                     >
                       {cat.icon && cat.icon !== 'none' ? (
@@ -2586,6 +2683,7 @@ export default function App() {
           }}
         >
           <div
+            className="ios-screen-enter"
             style={{
               width: '100%',
               maxWidth: '340px',
@@ -2671,6 +2769,7 @@ export default function App() {
           }}
         >
           <div
+            className="ios-screen-enter"
             style={{
               width: '100%',
               maxWidth: '340px',
@@ -2740,6 +2839,7 @@ export default function App() {
           }}
         >
           <div
+            className="ios-screen-enter"
             style={{
               width: '100%',
               maxWidth: '340px',
@@ -2825,6 +2925,7 @@ export default function App() {
           }}
         >
           <div
+            className="ios-screen-enter"
             style={{
               width: '100%',
               maxWidth: '340px',
@@ -2890,6 +2991,7 @@ export default function App() {
           backgroundColor: theme.navBg,
           borderTop: `1px solid ${theme.border}`,
           padding: '8px 8px calc(10px + env(safe-area-inset-bottom))',
+          transition: `background-color 0.32s ${iosEase}, border-color 0.32s ${iosEase}`,
         }}
       >
         <div
@@ -2961,6 +3063,8 @@ export default function App() {
                   fontSize: '11px',
                   fontWeight: active ? 700 : 500,
                   cursor: 'pointer',
+                  transform: active ? 'translateY(-1px)' : 'translateY(0)',
+                  transition: `all 0.22s ${iosEase}`,
                 }}
               >
                 {tab.icon}
