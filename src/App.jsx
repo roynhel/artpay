@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.19';
+const APP_VERSION = 'v1.0.20';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -26,7 +26,9 @@ const DEFAULT_DATA = {
   transactions: [],
   wishes: [],
   subscriptions: [],
+  firstOpenedAt: null,
   lastBackupAt: null,
+  onboardingDismissed: false,
   skipCategoryDeleteConfirm: false,
   skipAccountDeleteConfirm: false,
   skipDebtDeleteConfirm: false,
@@ -227,7 +229,9 @@ const normalizeStoredData = (parsed) => ({
   ...DEFAULT_DATA,
   ...parsed,
   currency: parsed.currency || 'COP',
+  firstOpenedAt: parsed.firstOpenedAt || new Date().toISOString(),
   lastBackupAt: parsed.lastBackupAt || null,
+  onboardingDismissed: Boolean(parsed.onboardingDismissed),
   accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
   debts: Array.isArray(parsed.debts) ? parsed.debts : [],
   transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
@@ -359,7 +363,7 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
-    return DEFAULT_DATA;
+    return { ...DEFAULT_DATA, firstOpenedAt: new Date().toISOString() };
   });
 
   const [systemPrefersDark, setSystemPrefersDark] = useState(() =>
@@ -538,6 +542,10 @@ export default function App() {
 
   useEffect(() => {
     try {
+      if (!data.firstOpenedAt) {
+        setData((prev) => ({ ...prev, firstOpenedAt: new Date().toISOString() }));
+        return;
+      }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (e) {
       console.error(e);
@@ -576,12 +584,13 @@ export default function App() {
   }, [isDark]);
 
   const needsWeeklyBackupReminder = useMemo(() => {
-    if (!data.lastBackupAt) return true;
-    const lastTime = new Date(data.lastBackupAt).getTime();
-    if (Number.isNaN(lastTime)) return true;
+    const referenceDate = data.lastBackupAt || data.firstOpenedAt;
+    if (!referenceDate) return false;
+    const refTime = new Date(referenceDate).getTime();
+    if (Number.isNaN(refTime)) return false;
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    return Date.now() - lastTime >= sevenDaysMs;
-  }, [data.lastBackupAt]);
+    return Date.now() - refTime >= sevenDaysMs;
+  }, [data.lastBackupAt, data.firstOpenedAt]);
 
   const { totalAvailable, totalDebts, todayIncome, todayExpense } = useMemo(() => {
     const avail = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
@@ -1182,6 +1191,17 @@ export default function App() {
     [computedSubscriptions]
   );
 
+  const subAlertStatus = useMemo(() => {
+    const dueSoon = computedSubscriptions.filter((s) => !s.chargedThisMonth && s.daysLeft <= 7);
+    if (dueSoon.length === 0) return null;
+    const isUrgentRed = dueSoon.some((s) => s.daysLeft <= 2 || s.insufficientSoon);
+    return {
+      count: dueSoon.length,
+      color: isUrgentRed ? '#EF4444' : '#F59E0B',
+      textColor: isUrgentRed ? '#FFFFFF' : '#090B0E',
+    };
+  }, [computedSubscriptions]);
+
   // --- Movimientos ---
   const openTransactionModal = () => {
     if (data.accounts.length === 0) {
@@ -1240,12 +1260,19 @@ export default function App() {
       }
     }
 
+    const snapType = txType;
+    const snapAccountId = txAccount;
+    const snapCategoryName = txCategoryName.trim() || 'General';
+    const snapSubcategoryName = txSubcategoryName.trim();
+    const snapCategoryIcon = ALLOWED_ICON_IDS.has(txCategoryIcon) ? txCategoryIcon : 'none';
+    const snapNote = txNote.trim();
+    const snapWantLoc = txSaveLocation;
+
     let capturedLoc = null;
-    if (txSaveLocation) {
+    if (snapWantLoc) {
       setTxSavingLocation(true);
       setTxLocationStatus('Obteniendo ubicación...');
       const geoRes = await captureCurrentLocation();
-      setTxSavingLocation(false);
       if (geoRes.ok) {
         capturedLoc = geoRes.location;
       } else {
@@ -1254,31 +1281,37 @@ export default function App() {
       }
     }
 
-    const newTx = {
-      id: Date.now().toString(),
-      type: txType,
-      amount,
-      accountId: accountObj?.id || '',
-      accountName: accountObj?.name || 'Sin cuenta',
-      categoryName: txCategoryName.trim() || 'General',
-      subcategoryName: txSubcategoryName.trim(),
-      categoryIcon: ALLOWED_ICON_IDS.has(txCategoryIcon) ? txCategoryIcon : 'none',
-      note: txNote.trim(),
-      location: capturedLoc,
-      date: new Date().toISOString(),
-    };
+    setData((prev) => {
+      const targetAcc = prev.accounts.find((a) => a.id === snapAccountId) || prev.accounts[0];
+      const newTx = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: snapType,
+        amount,
+        accountId: targetAcc?.id || '',
+        accountName: targetAcc?.name || 'Sin cuenta',
+        categoryName: snapCategoryName,
+        subcategoryName: snapSubcategoryName,
+        categoryIcon: snapCategoryIcon,
+        note: snapNote,
+        location: capturedLoc,
+        date: new Date().toISOString(),
+      };
 
-    const updatedAccounts = data.accounts.map((acc) => {
-      if (acc.id !== txAccount) return acc;
-      const delta = txType === 'ingreso' ? amount : -amount;
-      return { ...acc, balance: Math.max(0, (Number(acc.balance) || 0) + delta) };
+      const updatedAccounts = prev.accounts.map((acc) => {
+        if (acc.id !== (targetAcc?.id || snapAccountId)) return acc;
+        const delta = snapType === 'ingreso' ? amount : -amount;
+        return { ...acc, balance: Math.max(0, (Number(acc.balance) || 0) + delta) };
+      });
+
+      return {
+        ...prev,
+        accounts: updatedAccounts,
+        transactions: [newTx, ...prev.transactions],
+      };
     });
 
-    setData((prev) => ({
-      ...prev,
-      accounts: updatedAccounts,
-      transactions: [newTx, ...prev.transactions],
-    }));
+    setTxSavingLocation(false);
+    setTxLocationStatus('');
     setShowTxModal(false);
   };
 
@@ -2201,7 +2234,28 @@ endstream`;
                     transition: `all 0.22s ${iosEase}`,
                   }}
                 >
-                  {item.label}
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>{item.label}</span>
+                    {item.id === 'suscripciones' && subAlertStatus && (
+                      <span
+                        style={{
+                          minWidth: '18px',
+                          height: '18px',
+                          padding: '0 5px',
+                          borderRadius: '999px',
+                          backgroundColor: subAlertStatus.color,
+                          color: subAlertStatus.textColor,
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {subAlertStatus.count}
+                      </span>
+                    )}
+                  </span>
                 </button>
               );
             })}
@@ -2347,6 +2401,65 @@ endstream`;
               </div>
             )}
 
+            {!data.onboardingDismissed &&
+              data.accounts.length === 0 &&
+              data.transactions.length === 0 &&
+              data.debts.length === 0 && (
+                <section
+                  className="ios-screen-enter"
+                  style={{
+                    background: theme.card,
+                    border: `1.5px solid ${theme.accentBlue}`,
+                    borderRadius: '18px',
+                    padding: '14px 16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 800, color: theme.accentBlueText }}>
+                      Guía rápida de inicio
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setData((prev) => ({ ...prev, onboardingDismissed: true }))}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: theme.textMuted,
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Entendido ✕
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.45 }}>
+                    • <strong>Plata disponible:</strong> Agrega tus cuentas (Nequi, banco, efectivo) para ver tu saldo real.<br />
+                    • <strong>Registrar movimiento / Transferir:</strong> Anota ingresos, gastos o pasa plata entre tus cuentas.<br />
+                    • <strong>Deudas, Suscrip. y Deseos:</strong> Controla lo que debes, tus cobros mensuales y tus metas de compra.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={goToAddAccount}
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      borderRadius: '11px',
+                      border: 'none',
+                      backgroundColor: theme.accentBlue,
+                      color: '#FFFFFF',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Empezar: Agregar mi primera cuenta
+                  </button>
+                </section>
+              )}
+
             {/* Cuadro Principal: Plata disponible */}
             <section
               style={{
@@ -2433,8 +2546,27 @@ endstream`;
                     }}
                   >
                     {data.accounts.length === 0 ? (
-                      <div style={{ fontSize: '12px', color: theme.availableMutedColor }}>
-                        No tienes cuentas agregadas aún.
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontSize: '12px', color: theme.availableMutedColor }}>
+                          No tienes cuentas agregadas aún. Crea tu primera cuenta (ej. Nequi, Bancolombia o Efectivo) para empezar.
+                        </div>
+                        <button
+                          type="button"
+                          onClick={goToAddAccount}
+                          style={{
+                            alignSelf: 'flex-start',
+                            padding: '7px 12px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            backgroundColor: theme.accentBlue,
+                            color: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          + Agregar cuenta
+                        </button>
                       </div>
                     ) : (
                       data.accounts.map((acc) => (
@@ -4849,7 +4981,7 @@ endstream`;
                     Coordenadas: {selectedTxDetail.location.lat}, {selectedTxDetail.location.lng}
                   </div>
 
-                  {/* Minimapa interactivo / tocable para abrir en la app de mapas predeterminada */}
+                  {/* Minimapa limpio recortado sin textos de atribucion ni donaciones, tocable para abrir app nativa */}
                   <a
                     href={getNativeMapHref(selectedTxDetail.location.lat, selectedTxDetail.location.lng)}
                     target="_blank"
@@ -4859,11 +4991,12 @@ endstream`;
                       position: 'relative',
                       display: 'block',
                       width: '100%',
-                      height: '138px',
+                      height: '140px',
                       borderRadius: '12px',
                       overflow: 'hidden',
                       border: `1px solid ${theme.borderStrong}`,
                       textDecoration: 'none',
+                      backgroundColor: '#1e293b',
                     }}
                   >
                     <iframe
@@ -4873,8 +5006,11 @@ endstream`;
                         buildMiniMapEmbedUrl(selectedTxDetail.location.lat, selectedTxDetail.location.lng)
                       }
                       style={{
-                        width: '100%',
-                        height: '100%',
+                        position: 'absolute',
+                        top: '-24px',
+                        left: '-10px',
+                        width: 'calc(100% + 20px)',
+                        height: 'calc(100% + 56px)',
                         border: 0,
                         pointerEvents: 'none',
                         display: 'block',
@@ -4885,7 +5021,7 @@ endstream`;
                         position: 'absolute',
                         bottom: '8px',
                         right: '8px',
-                        backgroundColor: 'rgba(9, 11, 14, 0.85)',
+                        backgroundColor: 'rgba(9, 11, 14, 0.88)',
                         color: '#FFFFFF',
                         fontSize: '11px',
                         fontWeight: 700,
@@ -6872,7 +7008,32 @@ endstream`;
                   transition: `all 0.22s ${iosEase}`,
                 }}
               >
-                {tab.icon}
+                <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {tab.icon}
+                  {tab.id === 'suscripciones' && subAlertStatus && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '-3px',
+                        right: '-6px',
+                        minWidth: '14px',
+                        height: '14px',
+                        padding: '0 3px',
+                        borderRadius: '999px',
+                        backgroundColor: subAlertStatus.color,
+                        color: subAlertStatus.textColor,
+                        fontSize: '9px',
+                        fontWeight: 800,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        boxShadow: '0 0 0 1.5px #06080B',
+                      }}
+                    >
+                      {subAlertStatus.count}
+                    </span>
+                  )}
+                </div>
                 <span>{tab.label}</span>
               </button>
             );
