@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.17';
+const APP_VERSION = 'v1.0.18';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
+  'artpay_data_v17',
   'artpay_data_v16',
   'artpay_data_v15',
   'artpay_data_v14',
@@ -174,6 +175,29 @@ const formatDateTimeLabel = (isoStr) => {
   return `${datePart} • ${timePart}`;
 };
 
+const getStatsPeriodSubtitle = (period, dayKey) => {
+  const [y, m, d] = String(dayKey || '').split('-').map(Number);
+  const baseDate = y && m && d ? new Date(y, m - 1, d) : new Date();
+
+  if (period === 'dia') {
+    const dayStr = baseDate.toLocaleDateString('es-CO', {
+      day: 'numeric',
+      month: 'long',
+    });
+    return `Hoy ${dayStr}`;
+  }
+
+  if (period === 'semana') {
+    const startWeek = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() - 6);
+    const startStr = startWeek.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' });
+    const endStr = baseDate.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' });
+    return `Semana del ${startStr} al ${endStr}`;
+  }
+
+  const monthName = baseDate.toLocaleDateString('es-CO', { month: 'long' });
+  return `Mes de ${monthName}`;
+};
+
 const getNextBillingDate = (billingDay, nowDate = new Date()) => {
   const safeDay = Math.max(1, Math.min(31, Number(billingDay) || 1));
   const year = nowDate.getFullYear();
@@ -228,6 +252,15 @@ const normalizeStoredData = (parsed) => ({
     : [],
 });
 
+const buildMiniMapEmbedUrl = (lat, lng) => {
+  const delta = 0.0045;
+  const minLng = (lng - delta).toFixed(6);
+  const minLat = (lat - delta).toFixed(6);
+  const maxLng = (lng + delta).toFixed(6);
+  const maxLat = (lat + delta).toFixed(6);
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${minLng}%2C${minLat}%2C${maxLng}%2C${maxLat}&layer=mapnik&marker=${lat}%2C${lng}`;
+};
+
 const captureCurrentLocation = () =>
   new Promise((resolve) => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -240,6 +273,7 @@ const captureCurrentLocation = () =>
         const lat = Number(pos.coords.latitude.toFixed(6));
         const lng = Number(pos.coords.longitude.toFixed(6));
         const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+        const embedUrl = buildMiniMapEmbedUrl(lat, lng);
         let placeLabel = '';
 
         try {
@@ -271,6 +305,7 @@ const captureCurrentLocation = () =>
             lng,
             label: placeLabel || `${lat}, ${lng}`,
             mapUrl,
+            embedUrl,
           },
         });
       },
@@ -1332,7 +1367,7 @@ export default function App() {
           }</td>
           <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.accountName}</td>
           <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${formatDateTimeLabel(t.date)}${
-            t.location?.label ? `<br/><small style="color:#475569;">📍 ${t.location.label}</small>` : ''
+            t.location?.label ? `<br/><small style="color:#475569;">${t.location.label}</small>` : ''
           }</td>
           <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;text-align:right;font-weight:700;">${
             t.type === 'ingreso' ? '+' : t.type === 'gasto' ? '-' : '⇄ '
@@ -1671,14 +1706,10 @@ export default function App() {
       const cat = t.categoryName || 'General';
 
       if (t.type === 'gasto') {
-        if (isSameDay) {
-          expCat[cat] = (expCat[cat] || 0) + amt;
-        }
+        expCat[cat] = (expCat[cat] || 0) + amt;
         expSum += amt;
       } else if (t.type === 'ingreso') {
-        if (isSameDay) {
-          incCat[cat] = (incCat[cat] || 0) + amt;
-        }
+        incCat[cat] = (incCat[cat] || 0) + amt;
         incSum += amt;
       }
     }
@@ -1691,6 +1722,11 @@ export default function App() {
       totalCompare: Math.max(incSum + expSum, 1),
     };
   }, [data.transactions, statsPeriod, currentDayKey]);
+
+  const statsPeriodSubtitle = useMemo(
+    () => getStatsPeriodSubtitle(statsPeriod, currentDayKey),
+    [statsPeriod, currentDayKey]
+  );
 
   const totalWishesValue = useMemo(
     () => data.wishes.reduce((acc, w) => acc + (Number(w.price) || 0), 0),
@@ -1788,6 +1824,9 @@ export default function App() {
               ? theme.success
               : theme.danger;
 
+            const subcatBg = tx.type === 'gasto' ? theme.dangerBg : theme.successBg;
+            const subcatColor = tx.type === 'gasto' ? theme.danger : theme.success;
+
             return (
               <div
                 key={tx.id}
@@ -1821,19 +1860,11 @@ export default function App() {
                             fontWeight: 700,
                             padding: '2px 7px',
                             borderRadius: '999px',
-                            backgroundColor: theme.accentBlueSoft,
-                            color: theme.accentBlueText,
+                            backgroundColor: subcatBg,
+                            color: subcatColor,
                           }}
                         >
                           {tx.subcategoryName}
-                        </span>
-                      )}
-                      {tx.location && (
-                        <span
-                          title="Con ubicación guardada"
-                          style={{ fontSize: '11px', color: theme.accentBlueText }}
-                        >
-                          📍
                         </span>
                       )}
                     </div>
@@ -1888,6 +1919,31 @@ export default function App() {
       ))}
     </div>
   );
+
+  // Ordenar categorías en Estadísticas poniendo arriba la que más total tiene (Ingresos vs Gastos)
+  const categoryBreakdownBlocks = useMemo(() => {
+    const gastosBlock = {
+      key: 'gastosCat',
+      title: 'Gasto por categoría',
+      total: totalAllExpenses,
+      entries: Object.entries(expenseByCategory).sort((a, b) => b[1] - a[1]),
+      emptyText: 'Sin gastos registrados en este rango.',
+      amountColor: theme.danger,
+    };
+
+    const ingresosBlock = {
+      key: 'ingresosCat',
+      title: 'Ingresos por categoría',
+      total: totalAllIncomes,
+      entries: Object.entries(incomeByCategory).sort((a, b) => b[1] - a[1]),
+      emptyText: 'Sin ingresos registrados en este rango.',
+      amountColor: theme.success,
+    };
+
+    return totalAllIncomes > totalAllExpenses
+      ? [ingresosBlock, gastosBlock]
+      : [gastosBlock, ingresosBlock];
+  }, [totalAllIncomes, totalAllExpenses, expenseByCategory, incomeByCategory, theme.danger, theme.success]);
 
   return (
     <div
@@ -2709,7 +2765,12 @@ export default function App() {
         {activeTab === 'estadisticas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-              <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Estadísticas</h2>
+              <div>
+                <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Estadísticas</h2>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: theme.accentBlueText, marginTop: '3px' }}>
+                  {statsPeriodSubtitle}
+                </div>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
                 {[
                   { id: 'dia', label: 'Día' },
@@ -2740,6 +2801,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* Siempre arriba: Ingresos vs Gastos */}
             <section
               style={{
                 background: theme.card,
@@ -2790,127 +2852,76 @@ export default function App() {
               </div>
             </section>
 
-            <section
-              style={{
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '18px',
-                overflow: 'hidden',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => toggleStat('gastosCat')}
-                style={{
-                  width: '100%',
-                  padding: '15px 16px',
-                  background: 'none',
-                  border: 'none',
-                  color: theme.textPrimary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  cursor: 'pointer',
-                }}
-              >
-                <span style={{ fontSize: '14px', fontWeight: 700 }}>Gasto por categoría</span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  {openStats.gastosCat ? '▲' : '▼'}
-                </span>
-              </button>
+            {/* Debajo: ordenado dinámicamente poniendo arriba el que mayor total tiene */}
+            {categoryBreakdownBlocks.map((block) => {
+              const isOpen = !!openStats[block.key];
+              return (
+                <section
+                  key={block.key}
+                  style={{
+                    background: theme.card,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '18px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleStat(block.key)}
+                    style={{
+                      width: '100%',
+                      padding: '15px 16px',
+                      background: 'none',
+                      border: 'none',
+                      color: theme.textPrimary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 700 }}>{block.title}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: block.amountColor }}>
+                        ({renderMoney(block.total)})
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                      {isOpen ? '▲' : '▼'}
+                    </span>
+                  </button>
 
-              <div className={`smooth-collapse ${openStats.gastosCat ? 'open' : 'closed'}`}>
-                <div className="smooth-collapse-inner">
-                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.keys(expenseByCategory).length === 0 ? (
-                      <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin gastos registrados hoy.</div>
-                    ) : (
-                      Object.entries(expenseByCategory)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([cat, amt]) => (
-                          <div
-                            key={cat}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              backgroundColor: theme.cardSubtle,
-                              border: `1px solid ${theme.border}`,
-                              borderRadius: '12px',
-                              padding: '10px 12px',
-                              fontSize: '13px',
-                            }}
-                          >
-                            <span style={{ fontWeight: 600 }}>{cat}</span>
-                            <span style={{ fontWeight: 700, color: theme.danger }}>{renderMoney(amt)}</span>
-                          </div>
-                        ))
-                    )}
+                  <div className={`smooth-collapse ${isOpen ? 'open' : 'closed'}`}>
+                    <div className="smooth-collapse-inner">
+                      <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {block.entries.length === 0 ? (
+                          <div style={{ fontSize: '13px', color: theme.textMuted }}>{block.emptyText}</div>
+                        ) : (
+                          block.entries.map(([cat, amt]) => (
+                            <div
+                              key={cat}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                backgroundColor: theme.cardSubtle,
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '12px',
+                                padding: '10px 12px',
+                                fontSize: '13px',
+                              }}
+                            >
+                              <span style={{ fontWeight: 600 }}>{cat}</span>
+                              <span style={{ fontWeight: 700, color: block.amountColor }}>{renderMoney(amt)}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            </section>
-
-            <section
-              style={{
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '18px',
-                overflow: 'hidden',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => toggleStat('ingresosCat')}
-                style={{
-                  width: '100%',
-                  padding: '15px 16px',
-                  background: 'none',
-                  border: 'none',
-                  color: theme.textPrimary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  cursor: 'pointer',
-                }}
-              >
-                <span style={{ fontSize: '14px', fontWeight: 700 }}>Ingresos por categoría</span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  {openStats.ingresosCat ? '▲' : '▼'}
-                </span>
-              </button>
-
-              <div className={`smooth-collapse ${openStats.ingresosCat ? 'open' : 'closed'}`}>
-                <div className="smooth-collapse-inner">
-                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.keys(incomeByCategory).length === 0 ? (
-                      <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin ingresos registrados hoy.</div>
-                    ) : (
-                      Object.entries(incomeByCategory)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([cat, amt]) => (
-                          <div
-                            key={cat}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              backgroundColor: theme.cardSubtle,
-                              border: `1px solid ${theme.border}`,
-                              borderRadius: '12px',
-                              padding: '10px 12px',
-                              fontSize: '13px',
-                            }}
-                          >
-                            <span style={{ fontWeight: 600 }}>{cat}</span>
-                            <span style={{ fontWeight: 700, color: theme.success }}>{renderMoney(amt)}</span>
-                          </div>
-                        ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            </section>
+                </section>
+              );
+            })}
           </div>
         )}
 
@@ -4636,7 +4647,7 @@ export default function App() {
         )}
       </main>
 
-      {/* ================= MODAL DETALLE DEL MOVIMIENTO AL TOCARLO ================= */}
+      {/* ================= MODAL DETALLE DEL MOVIMIENTO AL TOCARLO (CON MINIMAPA) ================= */}
       {selectedTxDetail && (
         <div
           className="ios-backdrop-enter"
@@ -4657,7 +4668,7 @@ export default function App() {
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '100%',
-              maxWidth: '370px',
+              maxWidth: '375px',
               backgroundColor: theme.cardSolid,
               border: `1px solid ${theme.borderStrong}`,
               borderRadius: '22px',
@@ -4665,6 +4676,8 @@ export default function App() {
               display: 'flex',
               flexDirection: 'column',
               gap: '12px',
+              maxHeight: '88dvh',
+              overflowY: 'auto',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -4719,7 +4732,13 @@ export default function App() {
               {selectedTxDetail.subcategoryName && (
                 <div>
                   <span style={{ color: theme.textMuted }}>Subcategoría: </span>
-                  <strong style={{ color: theme.accentBlueText }}>{selectedTxDetail.subcategoryName}</strong>
+                  <strong
+                    style={{
+                      color: selectedTxDetail.type === 'gasto' ? theme.danger : theme.success,
+                    }}
+                  >
+                    {selectedTxDetail.subcategoryName}
+                  </strong>
                 </div>
               )}
               <div>
@@ -4755,29 +4774,59 @@ export default function App() {
               {selectedTxDetail.location ? (
                 <>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: theme.textPrimary }}>
-                    📍 {selectedTxDetail.location.label}
+                    {selectedTxDetail.location.label}
                   </div>
                   <div style={{ fontSize: '11px', color: theme.textMuted }}>
                     Coordenadas: {selectedTxDetail.location.lat}, {selectedTxDetail.location.lng}
                   </div>
+
+                  {/* Minimapa interactivo / tocable para abrir en Google Maps */}
                   <a
                     href={selectedTxDetail.location.mapUrl}
                     target="_blank"
                     rel="noopener noreferrer"
+                    title="Toca para abrir en Google Maps"
                     style={{
-                      display: 'inline-block',
-                      textAlign: 'center',
-                      padding: '9px 12px',
-                      borderRadius: '10px',
-                      backgroundColor: theme.accentBlueSoft,
-                      border: `1px solid ${theme.accentBlue}`,
-                      color: theme.accentBlueText,
-                      fontSize: '12px',
-                      fontWeight: 700,
+                      position: 'relative',
+                      display: 'block',
+                      width: '100%',
+                      height: '138px',
+                      borderRadius: '12px',
+                      overflow: 'hidden',
+                      border: `1px solid ${theme.borderStrong}`,
                       textDecoration: 'none',
                     }}
                   >
-                    Ver en Google Maps ↗
+                    <iframe
+                      title="Minimapa de ubicación"
+                      src={
+                        selectedTxDetail.location.embedUrl ||
+                        buildMiniMapEmbedUrl(selectedTxDetail.location.lat, selectedTxDetail.location.lng)
+                      }
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        border: 0,
+                        pointerEvents: 'none',
+                        display: 'block',
+                      }}
+                    />
+                    <span
+                      style={{
+                        position: 'absolute',
+                        bottom: '8px',
+                        right: '8px',
+                        backgroundColor: 'rgba(9, 11, 14, 0.85)',
+                        color: '#FFFFFF',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        padding: '5px 9px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255,255,255,0.2)',
+                      }}
+                    >
+                      Abrir en Google Maps ↗
+                    </span>
                   </a>
                 </>
               ) : (
@@ -5219,7 +5268,7 @@ export default function App() {
                         </div>
                         <div style={{ color: theme.textMuted }}>
                           {formatDateTimeLabel(tx.date)}{tx.note && tx.type !== 'transferencia' ? ` • ${tx.note}` : ''}
-                          {tx.location?.label ? ` • 📍 ${tx.location.label}` : ''}
+                          {tx.location?.label ? ` • ${tx.location.label}` : ''}
                         </div>
                       </div>
                       <span
@@ -6167,6 +6216,10 @@ export default function App() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
                     {selectedCategoryObject.subcategories.map((sub) => {
                       const subSelected = txSubcategoryName === sub;
+                      const activeSubBg = txType === 'gasto' ? theme.dangerBg : theme.successBg;
+                      const activeSubBorder = txType === 'gasto' ? theme.danger : theme.success;
+                      const activeSubColor = txType === 'gasto' ? theme.danger : theme.success;
+
                       return (
                         <button
                           key={sub}
@@ -6175,9 +6228,11 @@ export default function App() {
                           style={{
                             padding: '6px 11px',
                             borderRadius: '999px',
-                            border: subSelected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
-                            backgroundColor: subSelected ? theme.accentBlueSoft : theme.inputBg,
-                            color: subSelected ? theme.accentBlueText : theme.textSecondary,
+                            border: subSelected
+                              ? `1.5px solid ${activeSubBorder}`
+                              : `1px solid ${theme.border}`,
+                            backgroundColor: subSelected ? activeSubBg : theme.inputBg,
+                            color: subSelected ? activeSubColor : theme.textSecondary,
                             fontSize: '12px',
                             fontWeight: subSelected ? 700 : 500,
                             cursor: 'pointer',
@@ -6191,7 +6246,7 @@ export default function App() {
                 </div>
               )}
 
-            {/* Opción de guardar ubicación: Sí / No */}
+            {/* Opción de guardar ubicación: Sí / No (sin ícono al lado) */}
             <div
               style={{
                 backgroundColor: theme.cardSubtle,
@@ -6205,7 +6260,7 @@ export default function App() {
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                 <span style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary }}>
-                  📍 ¿Guardar ubicación?
+                  ¿Guardar ubicación?
                 </span>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button
