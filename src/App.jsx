@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v10';
+const STORAGE_KEY = 'artpay_data_v11';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -18,11 +18,11 @@ const DEFAULT_DATA = {
 };
 
 const CURRENCY_OPTIONS = [
-  { code: 'COP', symbol: '$', label: 'COP — Peso colombiano' },
-  { code: 'USD', symbol: '$', label: 'USD — Dólar estadounidense' },
-  { code: 'EUR', symbol: '€', label: 'EUR — Euro' },
-  { code: 'MXN', symbol: '$', label: 'MXN — Peso mexicano' },
-  { code: 'GBP', symbol: '£', label: 'GBP — Libra esterlina' },
+  { code: 'COP', label: 'COP — Peso colombiano' },
+  { code: 'USD', label: 'USD — Dólar estadounidense' },
+  { code: 'EUR', label: 'EUR — Euro' },
+  { code: 'MXN', label: 'MXN — Peso mexicano' },
+  { code: 'GBP', label: 'GBP — Libra esterlina' },
 ];
 
 const ICON_OPTIONS = [
@@ -103,11 +103,6 @@ const formatMoneyByCurrency = (value, currency = 'COP') => {
   }).format(num);
 };
 
-const formatBigMoney = (value, currency = 'COP') => {
-  const base = formatMoneyByCurrency(value, currency);
-  return `${base} ${currency || 'COP'}`;
-};
-
 const parseMoneyInput = (str) => {
   const cleaned = String(str).replace(/[^\d]/g, '');
   return cleaned ? Number(cleaned) : 0;
@@ -155,6 +150,31 @@ const formatDateTimeLabel = (isoStr) => {
   return `${datePart} • ${timePart}`;
 };
 
+const getNextBillingDate = (billingDay, nowDate = new Date()) => {
+  const safeDay = Math.max(1, Math.min(31, Number(billingDay) || 1));
+  const year = nowDate.getFullYear();
+  const month = nowDate.getMonth();
+  const maxDayInCurrentMonth = new Date(year, month + 1, 0).getDate();
+  const dayThisMonth = Math.min(safeDay, maxDayInCurrentMonth);
+
+  const candidate = new Date(year, month, dayThisMonth, 23, 59, 59);
+  const todayStart = new Date(year, month, nowDate.getDate(), 0, 0, 0);
+
+  if (candidate >= todayStart) {
+    return new Date(year, month, dayThisMonth);
+  }
+  const nextMonthMaxDay = new Date(year, month + 2, 0).getDate();
+  return new Date(year, month + 1, Math.min(safeDay, nextMonthMaxDay));
+};
+
+const getNextMonthCycleDate = (billingDay, fromDate = new Date()) => {
+  const safeDay = Math.max(1, Math.min(31, Number(billingDay) || 1));
+  const year = fromDate.getFullYear();
+  const nextMonth = fromDate.getMonth() + 1;
+  const maxDayNext = new Date(year, nextMonth + 1, 0).getDate();
+  return new Date(year, nextMonth, Math.min(safeDay, maxDayNext));
+};
+
 export default function App() {
   const [data, setData] = useState(() => {
     try {
@@ -200,7 +220,7 @@ export default function App() {
     }
   }, []);
 
-  // Control del día actual para reiniciar "HOY" a las 12:00 a. m. (00:00)
+  // Control del día actual para reiniciar a las 12:00 a. m. (00:00)
   const [currentDayKey, setCurrentDayKey] = useState(() => getLocalDayKey(new Date()));
 
   useEffect(() => {
@@ -215,21 +235,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('inicio'); // inicio | estadisticas | suscripciones | deseos | config
   const [hideBalances, setHideBalances] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  // Cuentas abiertas por defecto en Plata disponible
   const [accountsExpanded, setAccountsExpanded] = useState(true);
 
   const [noAccountAlert, setNoAccountAlert] = useState(false);
-  const [celebrationBanner, setCelebrationBanner] = useState('');
-
-  // Modal de abonos a Deudas
-  const [showDebtModal, setShowDebtModal] = useState(false);
-  const [payAmounts, setPayAmounts] = useState({});
-  const [payAccounts, setPayAccounts] = useState({});
-  const [debtPayError, setDebtPayError] = useState('');
-
-  // Confirmación obligatoria al eliminar movimiento (sin "no volver a preguntar")
   const [txToDelete, setTxToDelete] = useState(null);
+
+  // Filtro de rango en Estadísticas: 'dia' | 'semana' | 'mes'
+  const [statsPeriod, setStatsPeriod] = useState('dia');
 
   // Gestos de deslizamiento horizontal para abrir/cerrar menú lateral
   const swipeStartX = useRef(null);
@@ -293,22 +305,18 @@ export default function App() {
   const [newDebtAmount, setNewDebtAmount] = useState('');
   const [configNotice, setConfigNotice] = useState('');
 
-  // Confirmación de borrado de categorías
+  // Confirmaciones de borrado
   const [catToDelete, setCatToDelete] = useState(null);
   const [showReenableCatPrompt, setShowReenableCatPrompt] = useState(false);
-
-  // Confirmación de borrado de cuentas
   const [accToDelete, setAccToDelete] = useState(null);
   const [showReenableAccPrompt, setShowReenableAccPrompt] = useState(false);
-
-  // Confirmación de borrado de deudas
   const [debtToDelete, setDebtToDelete] = useState(null);
   const [showReenableDebtPrompt, setShowReenableDebtPrompt] = useState(false);
 
   // Suscripciones
   const [subName, setSubName] = useState('');
   const [subPrice, setSubPrice] = useState('');
-  const [subBillingDay, setSubBillingDay] = useState('1');
+  const [subBillingDay, setSubBillingDay] = useState('12');
   const [subAccountId, setSubAccountId] = useState('');
   const [subError, setSubError] = useState('');
 
@@ -394,79 +402,6 @@ export default function App() {
     setOpenSections((s) => ({ ...s, cuentas: true }));
   };
 
-  // --- Deudas: abrir modal y abonar ---
-  const openDebtModal = () => {
-    const initialAcc = data.accounts[0]?.id || '';
-    const mapAcc = {};
-    data.debts.forEach((d) => {
-      mapAcc[d.id] = payAccounts[d.id] || initialAcc;
-    });
-    setPayAccounts(mapAcc);
-    setDebtPayError('');
-    setShowDebtModal(true);
-  };
-
-  const handlePayDebt = (debt) => {
-    setDebtPayError('');
-    const rawPay = payAmounts[debt.id] || '';
-    const amountToPay = parseMoneyInput(rawPay);
-    if (!amountToPay || amountToPay <= 0) {
-      setDebtPayError(`Escribe un valor a abonar para "${debt.name}".`);
-      return;
-    }
-
-    const chosenAccId = payAccounts[debt.id] || '';
-    const accObj = data.accounts.find((a) => a.id === chosenAccId);
-
-    if (accObj && amountToPay > (Number(accObj.balance) || 0)) {
-      setDebtPayError(
-        `No tienes saldo suficiente en ${accObj.name} (${formatMoneyByCurrency(accObj.balance, currency)}) para abonar ${formatMoneyByCurrency(amountToPay, currency)}.`
-      );
-      return;
-    }
-
-    const currentDebt = Number(debt.amount) || 0;
-    const remainingDebt = Math.max(0, currentDebt - amountToPay);
-    const actualPaid = currentDebt - remainingDebt;
-
-    const updatedAccounts = data.accounts.map((a) => {
-      if (!accObj || a.id !== accObj.id) return a;
-      return { ...a, balance: Math.max(0, (Number(a.balance) || 0) - actualPaid) };
-    });
-
-    const newTx = {
-      id: Date.now().toString(),
-      type: 'gasto',
-      amount: actualPaid,
-      accountId: accObj?.id || '',
-      accountName: accObj?.name || 'Sin cuenta',
-      categoryName: `Abono deuda: ${debt.name}`,
-      categoryIcon: 'none',
-      note: remainingDebt === 0 ? 'Deuda liquidada' : 'Abono a deuda',
-      date: new Date().toISOString(),
-    };
-
-    const nextDebts =
-      remainingDebt === 0
-        ? data.debts.filter((d) => d.id !== debt.id)
-        : data.debts.map((d) => (d.id === debt.id ? { ...d, amount: remainingDebt } : d));
-
-    setData((prev) => ({
-      ...prev,
-      accounts: updatedAccounts,
-      debts: nextDebts,
-      transactions: [newTx, ...prev.transactions],
-    }));
-
-    setPayAmounts((prev) => ({ ...prev, [debt.id]: '' }));
-
-    if (remainingDebt === 0) {
-      setShowDebtModal(false);
-      setCelebrationBanner(`¡Bien hecho! Una deuda menos: "${debt.name}" quedó en ${formatMoneyByCurrency(0, currency)}.`);
-      setTimeout(() => setCelebrationBanner(''), 4500);
-    }
-  };
-
   // --- Cuentas ---
   const handleAddAccount = (e) => {
     e.preventDefault();
@@ -546,7 +481,7 @@ export default function App() {
     setCatToDelete(null);
   };
 
-  // --- Deudas (editar nombre y monto + borrar con confirmación) ---
+  // --- Deudas (editar nombre y monto + reordenar + borrar con confirmación) ---
   const handleAddDebt = (e) => {
     e.preventDefault();
     if (!newDebtName.trim()) return;
@@ -576,6 +511,17 @@ export default function App() {
     }));
   };
 
+  const reorderDebts = (fromIdx, toIdx) => {
+    if (fromIdx === null || toIdx === null || fromIdx === toIdx) return;
+    if (toIdx < 0 || toIdx >= data.debts.length) return;
+    setData((prev) => {
+      const updated = [...prev.debts];
+      const [moved] = updated.splice(fromIdx, 1);
+      updated.splice(toIdx, 0, moved);
+      return { ...prev, debts: updated };
+    });
+  };
+
   const requestDeleteDebt = (debt) => {
     if (data.skipDebtDeleteConfirm) {
       setData((prev) => ({
@@ -598,7 +544,7 @@ export default function App() {
   };
 
   // --- Suscripciones ---
-  const currentMonthKey = currentDayKey.slice(0, 7); // YYYY-MM
+  const currentMonthKey = currentDayKey.slice(0, 7);
 
   const handleAddSubscription = (e) => {
     e.preventDefault();
@@ -635,7 +581,7 @@ export default function App() {
     }));
     setSubName('');
     setSubPrice('');
-    setSubBillingDay('1');
+    setSubBillingDay('12');
   };
 
   const handleChargeSubscription = (sub) => {
@@ -688,17 +634,60 @@ export default function App() {
     }));
   };
 
-  const sortedSubscriptions = useMemo(() => {
-    const todayDay = new Date().getDate();
-    return [...data.subscriptions].sort((a, b) => {
-      const aCharged = a.lastChargedMonth === currentMonthKey ? 1 : 0;
-      const bCharged = b.lastChargedMonth === currentMonthKey ? 1 : 0;
-      if (aCharged !== bCharged) return aCharged - bCharged;
+  const computedSubscriptions = useMemo(() => {
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const msPerDay = 1000 * 60 * 60 * 24;
 
-      const distA = a.billingDay >= todayDay ? a.billingDay - todayDay : 31 - todayDay + a.billingDay;
-      const distB = b.billingDay >= todayDay ? b.billingDay - todayDay : 31 - todayDay + b.billingDay;
-      return distA - distB;
-    });
+    return data.subscriptions
+      .map((sub) => {
+        const chargedThisMonth = sub.lastChargedMonth === currentMonthKey;
+        const targetDate = chargedThisMonth
+          ? getNextMonthCycleDate(sub.billingDay, now)
+          : getNextBillingDate(sub.billingDay, now);
+
+        const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
+        const daysLeft = Math.max(0, Math.round((targetMidnight - todayMidnight) / msPerDay));
+
+        let badgeText = daysLeft === 0 ? 'Hoy' : daysLeft === 1 ? 'Falta 1 día' : `Faltan ${daysLeft} días`;
+        let badgeColor = '#60A5FA';
+        let badgeBg = 'rgba(37, 99, 235, 0.18)';
+
+        if (chargedThisMonth && daysLeft > 10) {
+          badgeColor = '#60A5FA';
+          badgeBg = 'rgba(37, 99, 235, 0.18)';
+        } else if (daysLeft <= 2) {
+          badgeColor = '#F87171';
+          badgeBg = 'rgba(239, 68, 68, 0.18)';
+        } else if (daysLeft <= 7) {
+          badgeColor = '#FB923C';
+          badgeBg = 'rgba(249, 115, 22, 0.18)';
+        } else if (daysLeft <= 14) {
+          badgeColor = '#FACC15';
+          badgeBg = 'rgba(234, 179, 8, 0.18)';
+        }
+
+        const dateLabel = targetDate.toLocaleDateString('es-CO', {
+          day: 'numeric',
+          month: 'long',
+        });
+
+        return {
+          ...sub,
+          chargedThisMonth,
+          daysLeft,
+          dateLabel,
+          badgeText,
+          badgeColor,
+          badgeBg,
+        };
+      })
+      .sort((a, b) => {
+        if (a.chargedThisMonth !== b.chargedThisMonth) {
+          return a.chargedThisMonth ? 1 : -1;
+        }
+        return a.daysLeft - b.daysLeft;
+      });
   }, [data.subscriptions, currentMonthKey]);
 
   // --- Movimientos ---
@@ -781,7 +770,6 @@ export default function App() {
     setTxToDelete(null);
   };
 
-  // Agrupar movimientos por fecha (sin colapsables/acordeones)
   const groupedTransactions = useMemo(() => {
     const groups = [];
     const indexByDay = new Map();
@@ -869,8 +857,8 @@ export default function App() {
           <h1>ArtPay — Resumen Financiero (${currency})</h1>
           <p style="color:#64748b;margin-top:0;">${data.userName ? `Usuario: ${data.userName} • ` : ''}Fecha: ${new Date().toLocaleDateString('es-CO')}</p>
           <div class="grid">
-            <div class="box"><div>Plata disponible</div><strong>${formatBigMoney(totalAvailable, currency)}</strong></div>
-            <div class="box"><div>Deudas</div><strong>${formatBigMoney(totalDebts, currency)}</strong></div>
+            <div class="box"><div>Plata disponible</div><strong>${formatMoneyByCurrency(totalAvailable, currency)} ${currency}</strong></div>
+            <div class="box"><div>Deudas</div><strong>${formatMoneyByCurrency(totalDebts, currency)} ${currency}</strong></div>
             <div class="box"><div>Deseos estimados</div><strong>${formatMoneyByCurrency(data.wishes.reduce((s, w) => s + (Number(w.price) || 0), 0), currency)}</strong></div>
           </div>
           <h3>Últimos movimientos</h3>
@@ -1015,7 +1003,7 @@ export default function App() {
             accentBlue: '#2563EB',
             accentBlueSoft: 'rgba(37, 99, 235, 0.12)',
             accentBlueText: '#2563EB',
-            iconCircleBg: 'linear-gradient(160deg, #272B33 0%, #090B0E 100%)',
+            iconCircleBg: 'linear-gradient(160deg, #272B33 0%, #090B0F 100%)',
             iconCircleColor: '#E2E8F0',
             iconCircleBorder: '1.5px solid #94A3B8',
             inputBg: '#F8FAFC',
@@ -1043,25 +1031,89 @@ export default function App() {
   };
 
   const renderMoney = (val) => (hideBalances ? '••••••' : formatMoneyByCurrency(val, currency));
-  const renderBigMoney = (val) => (hideBalances ? '••••••' : formatBigMoney(val, currency));
 
+  // Monto grande con código de moneda a 1/4 del tamaño de la letra principal
+  const renderBigCurrencyAmount = (val, mainFontPx, colorStyle = null) => {
+    if (hideBalances) {
+      return <span style={{ fontSize: `${mainFontPx}px`, fontWeight: 800 }}>••••••</span>;
+    }
+    const formatted = formatMoneyByCurrency(val, currency);
+    const codeFontPx = Math.max(8, Math.round(mainFontPx / 4));
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '5px' }}>
+        <span
+          style={
+            colorStyle || {
+              fontSize: `${mainFontPx}px`,
+              fontWeight: 800,
+              letterSpacing: '-0.8px',
+              background: theme.silverGradient,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }
+          }
+        >
+          {formatted}
+        </span>
+        <span
+          style={{
+            fontSize: `${codeFontPx}px`,
+            fontWeight: 700,
+            letterSpacing: '0.4px',
+            color: colorStyle ? colorStyle.color : theme.availableLabelColor,
+            opacity: 0.9,
+          }}
+        >
+          {currency}
+        </span>
+      </span>
+    );
+  };
+
+  // Estadísticas filtradas por día / semana / mes (con reinicio diario para categoría)
   const { expenseByCategory, incomeByCategory, totalAllExpenses, totalAllIncomes, totalCompare } = useMemo(() => {
     const expCat = {};
     const incCat = {};
     let expSum = 0;
     let incSum = 0;
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfWeek = startOfToday - 6 * 24 * 60 * 60 * 1000;
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
     for (let i = 0; i < data.transactions.length; i += 1) {
       const t = data.transactions[i];
+      if (!t.date) continue;
+      const txTime = new Date(t.date).getTime();
+      if (Number.isNaN(txTime)) continue;
+
+      const isSameDay = getLocalDayKey(new Date(t.date)) === currentDayKey;
+      const inRange =
+        statsPeriod === 'dia'
+          ? isSameDay
+          : statsPeriod === 'semana'
+          ? txTime >= startOfWeek
+          : txTime >= startOfMonth;
+
+      if (!inRange) continue;
+
       const amt = Number(t.amount) || 0;
       const cat = t.categoryName || 'General';
+
       if (t.type === 'gasto') {
-        expCat[cat] = (expCat[cat] || 0) + amt;
+        if (isSameDay) {
+          expCat[cat] = (expCat[cat] || 0) + amt;
+        }
         expSum += amt;
       } else if (t.type === 'ingreso') {
-        incCat[cat] = (incCat[cat] || 0) + amt;
+        if (isSameDay) {
+          incCat[cat] = (incCat[cat] || 0) + amt;
+        }
         incSum += amt;
       }
     }
+
     return {
       expenseByCategory: expCat,
       incomeByCategory: incCat,
@@ -1069,7 +1121,7 @@ export default function App() {
       totalAllIncomes: incSum,
       totalCompare: Math.max(incSum + expSum, 1),
     };
-  }, [data.transactions]);
+  }, [data.transactions, statsPeriod, currentDayKey]);
 
   const totalWishesValue = useMemo(
     () => data.wishes.reduce((acc, w) => acc + (Number(w.price) || 0), 0),
@@ -1109,6 +1161,39 @@ export default function App() {
     };
   };
 
+  const getDebtRankStyle = (idx) => {
+    if (idx === 0) {
+      return {
+        badgeBg: '#EF4444',
+        badgeColor: '#FFFFFF',
+        border: 'rgba(239, 68, 68, 0.5)',
+        amountColor: '#F87171',
+      };
+    }
+    if (idx === 1) {
+      return {
+        badgeBg: '#F97316',
+        badgeColor: '#FFFFFF',
+        border: 'rgba(249, 115, 22, 0.5)',
+        amountColor: '#FB923C',
+      };
+    }
+    if (idx === 2) {
+      return {
+        badgeBg: '#EAB308',
+        badgeColor: '#090B0E',
+        border: 'rgba(234, 179, 8, 0.5)',
+        amountColor: '#FACC15',
+      };
+    }
+    return {
+      badgeBg: theme.cardSubtle,
+      badgeColor: theme.textSecondary,
+      border: theme.border,
+      amountColor: theme.danger,
+    };
+  };
+
   return (
     <div
       onTouchStart={handleScreenTouchStart}
@@ -1126,7 +1211,7 @@ export default function App() {
         @keyframes iosTabEnter {
           from {
             opacity: 0;
-            transform: translateY(12px) scale(0.99);
+            transform: translateY(10px) scale(0.99);
           }
           to {
             opacity: 1;
@@ -1150,13 +1235,28 @@ export default function App() {
           }
         }
         .ios-screen-enter {
-          animation: iosTabEnter 0.36s ${iosEase};
+          animation: iosTabEnter 0.34s ${iosEase};
         }
         .ios-drawer-enter {
-          animation: iosDrawerSlide 0.34s ${iosEase};
+          animation: iosDrawerSlide 0.32s ${iosEase};
         }
         .ios-sheet-enter {
-          animation: iosSheetSlide 0.36s ${iosEase};
+          animation: iosSheetSlide 0.34s ${iosEase};
+        }
+        .smooth-collapse {
+          display: grid;
+          transition: grid-template-rows 0.32s ${iosEase}, opacity 0.28s ${iosEase};
+        }
+        .smooth-collapse.open {
+          grid-template-rows: 1fr;
+          opacity: 1;
+        }
+        .smooth-collapse.closed {
+          grid-template-rows: 0fr;
+          opacity: 0;
+        }
+        .smooth-collapse-inner {
+          overflow: hidden;
         }
       `}</style>
 
@@ -1292,7 +1392,6 @@ export default function App() {
                 overflow: 'hidden',
                 cursor: 'pointer',
                 flexShrink: 0,
-                transition: `transform 0.2s ${iosEase}`,
               }}
             >
               <img
@@ -1347,7 +1446,6 @@ export default function App() {
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              transition: `transform 0.2s ${iosEase}, background-color 0.25s ${iosEase}`,
             }}
           >
             {hideBalances ? (
@@ -1374,24 +1472,7 @@ export default function App() {
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {celebrationBanner && (
-              <div
-                className="ios-screen-enter"
-                style={{
-                  backgroundColor: theme.successBg,
-                  border: `1.5px solid ${theme.success}`,
-                  color: theme.success,
-                  borderRadius: '14px',
-                  padding: '12px 14px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                }}
-              >
-                {celebrationBanner}
-              </div>
-            )}
-
-            {/* Cuadro Principal: Plata disponible (cuentas abiertas por defecto) */}
+            {/* Cuadro Principal: Plata disponible (cuentas abiertas con animación suave) */}
             <section
               style={{
                 background: theme.availableCard,
@@ -1424,7 +1505,6 @@ export default function App() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      transition: `all 0.3s ${iosEase}`,
                     }}
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -1459,57 +1539,49 @@ export default function App() {
                 </span>
               </div>
 
-              <div
-                style={{
-                  fontSize: '30px',
-                  fontWeight: 800,
-                  letterSpacing: '-0.8px',
-                  background: theme.silverGradient,
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  marginBottom: '12px',
-                }}
-              >
-                {renderBigMoney(totalAvailable)}
+              <div style={{ marginBottom: '12px' }}>
+                {renderBigCurrencyAmount(totalAvailable, 32)}
               </div>
 
-              {/* Desplegable de cuentas abierto por defecto */}
-              {accountsExpanded && (
-                <div
-                  style={{
-                    backgroundColor: theme.availableSubCardBg,
-                    border: `1px solid ${theme.availableSubCardBorder}`,
-                    borderRadius: '14px',
-                    padding: '10px 12px',
-                    marginBottom: '14px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px',
-                  }}
-                >
-                  {data.accounts.length === 0 ? (
-                    <div style={{ fontSize: '12px', color: theme.availableMutedColor }}>
-                      No tienes cuentas agregadas aún.
-                    </div>
-                  ) : (
-                    data.accounts.map((acc) => (
-                      <div
-                        key={acc.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          fontSize: '13px',
-                          padding: '4px 0',
-                        }}
-                      >
-                        <span style={{ color: '#F1F5F9', fontWeight: 600 }}>{acc.name}</span>
-                        <span style={{ color: '#93C5FD', fontWeight: 700 }}>{renderMoney(acc.balance)}</span>
+              {/* Desplegable de cuentas con animación suave */}
+              <div className={`smooth-collapse ${accountsExpanded ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div
+                    style={{
+                      backgroundColor: theme.availableSubCardBg,
+                      border: `1px solid ${theme.availableSubCardBorder}`,
+                      borderRadius: '14px',
+                      padding: '10px 12px',
+                      marginBottom: '14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    {data.accounts.length === 0 ? (
+                      <div style={{ fontSize: '12px', color: theme.availableMutedColor }}>
+                        No tienes cuentas agregadas aún.
                       </div>
-                    ))
-                  )}
+                    ) : (
+                      data.accounts.map((acc) => (
+                        <div
+                          key={acc.id}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '13px',
+                            padding: '4px 0',
+                          }}
+                        >
+                          <span style={{ color: '#F1F5F9', fontWeight: 600 }}>{acc.name}</span>
+                          <span style={{ color: '#93C5FD', fontWeight: 700 }}>{renderMoney(acc.balance)}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
 
               <div
                 style={{
@@ -1520,7 +1592,7 @@ export default function App() {
                   marginBottom: '8px',
                 }}
               >
-                HOY (SE REINICIA A LAS 12:00 AM)
+                HOY
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div
@@ -1603,9 +1675,12 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Deudas con moneda en número grande */}
+            {/* Tarjeta de Deudas (total en rojo + código de moneda a 1/4) */}
             <section
-              onClick={openDebtModal}
+              onClick={() => {
+                setActiveTab('config');
+                setOpenSections((s) => ({ ...s, deudas: true }));
+              }}
               style={{
                 background: theme.card,
                 border: `1px solid ${theme.border}`,
@@ -1615,7 +1690,6 @@ export default function App() {
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 cursor: 'pointer',
-                transition: `transform 0.2s ${iosEase}, border-color 0.2s ${iosEase}`,
               }}
             >
               <div>
@@ -1630,13 +1704,17 @@ export default function App() {
                 >
                   DEUDAS
                 </div>
-                <div style={{ fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>
-                  {renderBigMoney(totalDebts)}
+                <div>
+                  {renderBigCurrencyAmount(totalDebts, 24, {
+                    fontSize: '24px',
+                    fontWeight: 800,
+                    color: theme.danger,
+                  })}
                 </div>
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
                   {data.debts.length === 0
-                    ? 'Sin deudas • Toca para gestionar o ver'
-                    : `${data.debts.length} ${data.debts.length === 1 ? 'deuda activa' : 'deudas activas'} • Toca para abonar`}
+                    ? 'Sin deudas • Toca para gestionar en Configuración'
+                    : `${data.debts.length} ${data.debts.length === 1 ? 'deuda activa' : 'deudas activas'}`}
                 </div>
               </div>
 
@@ -1680,7 +1758,6 @@ export default function App() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '8px',
-                transition: `transform 0.2s ${iosEase}, box-shadow 0.2s ${iosEase}`,
               }}
             >
               <span style={{ fontSize: '19px', lineHeight: 1 }}>+</span> Registrar movimiento
@@ -1802,10 +1879,40 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= PESTAÑA ESTADÍSTICAS (ABIERTAS POR DEFECTO) ================= */}
+        {/* ================= PESTAÑA ESTADÍSTICAS (ABIERTAS POR DEFECTO + DÍA / SEMANA / MES) ================= */}
         {activeTab === 'estadisticas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Estadísticas</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Estadísticas</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+                {[
+                  { id: 'dia', label: 'Día' },
+                  { id: 'semana', label: 'Semana' },
+                  { id: 'mes', label: 'Mes' },
+                ].map((p) => {
+                  const active = statsPeriod === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setStatsPeriod(p.id)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '10px',
+                        border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                        backgroundColor: active ? theme.accentBlueSoft : theme.cardSubtle,
+                        color: active ? theme.accentBlueText : theme.textSecondary,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             <section
               style={{
@@ -1832,7 +1939,7 @@ export default function App() {
                       height: '100%',
                       backgroundColor: theme.success,
                       borderRadius: '999px',
-                      transition: `width 0.45s ${iosEase}`,
+                      transition: `width 0.4s ${iosEase}`,
                     }}
                   />
                 </div>
@@ -1850,14 +1957,14 @@ export default function App() {
                       height: '100%',
                       backgroundColor: theme.danger,
                       borderRadius: '999px',
-                      transition: `width 0.45s ${iosEase}`,
+                      transition: `width 0.4s ${iosEase}`,
                     }}
                   />
                 </div>
               </div>
             </section>
 
-            {/* Gasto por categoría (abierto por defecto) */}
+            {/* Gasto por categoría (abierto por defecto, reinicio diario) */}
             <section
               style={{
                 background: theme.card,
@@ -1887,37 +1994,39 @@ export default function App() {
                 </span>
               </button>
 
-              {openStats.gastosCat && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {Object.keys(expenseByCategory).length === 0 ? (
-                    <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin gastos registrados aún.</div>
-                  ) : (
-                    Object.entries(expenseByCategory)
-                      .sort((a, b) => b[1] - a[1])
-                      .map(([cat, amt]) => (
-                        <div
-                          key={cat}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            backgroundColor: theme.cardSubtle,
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '12px',
-                            padding: '10px 12px',
-                            fontSize: '13px',
-                          }}
-                        >
-                          <span style={{ fontWeight: 600 }}>{cat}</span>
-                          <span style={{ fontWeight: 700, color: theme.danger }}>{renderMoney(amt)}</span>
-                        </div>
-                      ))
-                  )}
+              <div className={`smooth-collapse ${openStats.gastosCat ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {Object.keys(expenseByCategory).length === 0 ? (
+                      <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin gastos registrados hoy.</div>
+                    ) : (
+                      Object.entries(expenseByCategory)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([cat, amt]) => (
+                          <div
+                            key={cat}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              backgroundColor: theme.cardSubtle,
+                              border: `1px solid ${theme.border}`,
+                              borderRadius: '12px',
+                              padding: '10px 12px',
+                              fontSize: '13px',
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{cat}</span>
+                            <span style={{ fontWeight: 700, color: theme.danger }}>{renderMoney(amt)}</span>
+                          </div>
+                        ))
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
             </section>
 
-            {/* Ingresos por categoría (abierto por defecto) */}
+            {/* Ingresos por categoría (abierto por defecto, reinicio diario) */}
             <section
               style={{
                 background: theme.card,
@@ -1947,34 +2056,36 @@ export default function App() {
                 </span>
               </button>
 
-              {openStats.ingresosCat && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {Object.keys(incomeByCategory).length === 0 ? (
-                    <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin ingresos registrados aún.</div>
-                  ) : (
-                    Object.entries(incomeByCategory)
-                      .sort((a, b) => b[1] - a[1])
-                      .map(([cat, amt]) => (
-                        <div
-                          key={cat}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            backgroundColor: theme.cardSubtle,
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '12px',
-                            padding: '10px 12px',
-                            fontSize: '13px',
-                          }}
-                        >
-                          <span style={{ fontWeight: 600 }}>{cat}</span>
-                          <span style={{ fontWeight: 700, color: theme.success }}>{renderMoney(amt)}</span>
-                        </div>
-                      ))
-                  )}
+              <div className={`smooth-collapse ${openStats.ingresosCat ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {Object.keys(incomeByCategory).length === 0 ? (
+                      <div style={{ fontSize: '13px', color: theme.textMuted }}>Sin ingresos registrados hoy.</div>
+                    ) : (
+                      Object.entries(incomeByCategory)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([cat, amt]) => (
+                          <div
+                            key={cat}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              backgroundColor: theme.cardSubtle,
+                              border: `1px solid ${theme.border}`,
+                              borderRadius: '12px',
+                              padding: '10px 12px',
+                              fontSize: '13px',
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{cat}</span>
+                            <span style={{ fontWeight: 700, color: theme.success }}>{renderMoney(amt)}</span>
+                          </div>
+                        ))
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
             </section>
           </div>
         )}
@@ -1985,7 +2096,7 @@ export default function App() {
             <div>
               <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Suscripciones</h2>
               <p style={{ fontSize: '12px', color: theme.textSecondary, margin: '3px 0 0' }}>
-                Las próximas a cobrar van primero; las ya cobradas pasan al final
+                Próxima a cobrar primero; ya cobradas al final
               </p>
             </div>
 
@@ -2044,7 +2155,7 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.9fr) minmax(0, 1.3fr)', gap: '8px' }}>
                 <div>
                   <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
-                    Día de cobro (1-31)
+                    Día del mes (1-31)
                   </label>
                   <input
                     type="number"
@@ -2058,7 +2169,7 @@ export default function App() {
 
                 <div>
                   <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
-                    ¿De qué dinero va a salir?
+                    ¿De qué dinero saldrá?
                   </label>
                   <select
                     value={subAccountId}
@@ -2099,7 +2210,7 @@ export default function App() {
               </button>
             </form>
 
-            {sortedSubscriptions.length === 0 ? (
+            {computedSubscriptions.length === 0 ? (
               <div
                 style={{
                   backgroundColor: theme.cardSolid,
@@ -2115,83 +2226,82 @@ export default function App() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {sortedSubscriptions.map((sub) => {
-                  const chargedThisMonth = sub.lastChargedMonth === currentMonthKey;
-                  return (
-                    <div
-                      key={sub.id}
-                      style={{
-                        background: theme.card,
-                        border: `1px solid ${chargedThisMonth ? theme.border : theme.borderStrong}`,
-                        borderRadius: '15px',
-                        padding: '12px 14px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '10px',
-                        opacity: chargedThisMonth ? 0.72 : 1,
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 700 }}>{sub.name}</span>
-                          <span
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              padding: '2px 8px',
-                              borderRadius: '999px',
-                              backgroundColor: chargedThisMonth ? theme.successBg : theme.accentBlueSoft,
-                              color: chargedThisMonth ? theme.success : theme.accentBlueText,
-                            }}
-                          >
-                            {chargedThisMonth ? 'Ya cobrada' : `Día ${sub.billingDay}`}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '3px' }}>
-                          Sale de: <strong style={{ color: theme.textSecondary }}>{sub.accountName}</strong> •{' '}
-                          <span style={{ color: theme.danger, fontWeight: 700 }}>{renderMoney(sub.price)}</span>
-                        </div>
+                {computedSubscriptions.map((sub) => (
+                  <div
+                    key={sub.id}
+                    style={{
+                      background: theme.card,
+                      border: `1px solid ${sub.chargedThisMonth ? theme.border : theme.borderStrong}`,
+                      borderRadius: '15px',
+                      padding: '12px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '10px',
+                      opacity: sub.chargedThisMonth ? 0.78 : 1,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '14px', fontWeight: 700 }}>{sub.name}</span>
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            backgroundColor: sub.badgeBg,
+                            color: sub.badgeColor,
+                          }}
+                        >
+                          {sub.badgeText}
+                        </span>
                       </div>
+                      <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '3px' }}>
+                        Se cobra el <strong>{sub.dateLabel}</strong> • Sale de: <strong>{sub.accountName}</strong>
+                      </div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: theme.danger, marginTop: '2px' }}>
+                        {renderMoney(sub.price)}
+                      </div>
+                    </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                        {!chargedThisMonth && (
-                          <button
-                            type="button"
-                            onClick={() => handleChargeSubscription(sub)}
-                            style={{
-                              padding: '7px 10px',
-                              borderRadius: '10px',
-                              border: 'none',
-                              backgroundColor: theme.accentBlue,
-                              color: '#FFFFFF',
-                              fontSize: '12px',
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Cobrar
-                          </button>
-                        )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      {!sub.chargedThisMonth && (
                         <button
                           type="button"
-                          onClick={() => handleDeleteSubscription(sub.id)}
+                          onClick={() => handleChargeSubscription(sub)}
                           style={{
-                            width: '28px',
-                            height: '28px',
-                            borderRadius: '8px',
+                            padding: '7px 10px',
+                            borderRadius: '10px',
                             border: 'none',
-                            backgroundColor: theme.dangerBg,
-                            color: theme.danger,
+                            backgroundColor: theme.accentBlue,
+                            color: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 700,
                             cursor: 'pointer',
                           }}
                         >
-                          ✕
+                          Cobrar
                         </button>
-                      </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSubscription(sub.id)}
+                        style={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          backgroundColor: theme.dangerBg,
+                          color: theme.danger,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ✕
+                      </button>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -2490,81 +2600,83 @@ export default function App() {
                 </span>
               </button>
 
-              {openSections.perfil && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div>
-                    <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
-                      Tu nombre
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ej: Roynhel"
-                      value={data.userName}
-                      onChange={(e) => setData((prev) => ({ ...prev, userName: e.target.value }))}
-                      style={baseInputStyle}
-                    />
-                  </div>
+              <div className={`smooth-collapse ${openSections.perfil ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
+                        Tu nombre
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Roynhel"
+                        value={data.userName}
+                        onChange={(e) => setData((prev) => ({ ...prev, userName: e.target.value }))}
+                        style={baseInputStyle}
+                      />
+                    </div>
 
-                  <div>
-                    <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
-                      Moneda principal (en montos grandes)
-                    </label>
-                    <select
-                      value={currency}
-                      onChange={(e) => setData((prev) => ({ ...prev, currency: e.target.value }))}
-                      style={baseInputStyle}
-                    >
-                      {CURRENCY_OPTIONS.map((opt) => (
-                        <option key={opt.code} value={opt.code}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    <div>
+                      <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
+                        Moneda principal (en montos grandes)
+                      </label>
+                      <select
+                        value={currency}
+                        onChange={(e) => setData((prev) => ({ ...prev, currency: e.target.value }))}
+                        style={baseInputStyle}
+                      >
+                        {CURRENCY_OPTIONS.map((opt) => (
+                          <option key={opt.code} value={opt.code}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '2px' }}>
-                    <button
-                      type="button"
-                      onClick={handleExportData}
-                      style={{
-                        padding: '10px',
-                        borderRadius: '10px',
-                        border: `1.5px solid ${theme.accentBlue}`,
-                        backgroundColor: theme.accentBlueSoft,
-                        color: theme.accentBlueText,
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Exportar información
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => importInputRef.current?.click()}
-                      style={{
-                        padding: '10px',
-                        borderRadius: '10px',
-                        border: `1.5px solid ${theme.accentBlue}`,
-                        backgroundColor: theme.accentBlueSoft,
-                        color: theme.accentBlueText,
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Importar información
-                    </button>
-                    <input
-                      ref={importInputRef}
-                      type="file"
-                      accept="application/json"
-                      onChange={handleImportFile}
-                      style={{ display: 'none' }}
-                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', paddingTop: '2px' }}>
+                      <button
+                        type="button"
+                        onClick={handleExportData}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '10px',
+                          border: `1.5px solid ${theme.accentBlue}`,
+                          backgroundColor: theme.accentBlueSoft,
+                          color: theme.accentBlueText,
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Exportar información
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => importInputRef.current?.click()}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '10px',
+                          border: `1.5px solid ${theme.accentBlue}`,
+                          backgroundColor: theme.accentBlueSoft,
+                          color: theme.accentBlueText,
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Importar información
+                      </button>
+                      <input
+                        ref={importInputRef}
+                        type="file"
+                        accept="application/json"
+                        onChange={handleImportFile}
+                        style={{ display: 'none' }}
+                      />
+                    </div>
                   </div>
                 </div>
-              )}
+              </div>
             </section>
 
             {/* 2. APARIENCIA */}
@@ -2597,37 +2709,39 @@ export default function App() {
                 </span>
               </button>
 
-              {openSections.apariencia && (
-                <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                  {[
-                    { id: 'dark', label: 'Negro' },
-                    { id: 'light', label: 'Claro' },
-                    { id: 'system', label: 'Sistema' },
-                  ].map((opt) => {
-                    const selected = data.theme === opt.id;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setData((prev) => ({ ...prev, theme: opt.id }))}
-                        style={{
-                          padding: '10px 8px',
-                          borderRadius: '12px',
-                          border: selected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
-                          backgroundColor: selected ? theme.accentBlueSoft : theme.cardSubtle,
-                          color: selected ? theme.accentBlueText : theme.textPrimary,
-                          fontWeight: 700,
-                          fontSize: '13px',
-                          cursor: 'pointer',
-                          transition: `all 0.22s ${iosEase}`,
-                        }}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
+              <div className={`smooth-collapse ${openSections.apariencia ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                    {[
+                      { id: 'dark', label: 'Negro' },
+                      { id: 'light', label: 'Claro' },
+                      { id: 'system', label: 'Sistema' },
+                    ].map((opt) => {
+                      const selected = data.theme === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setData((prev) => ({ ...prev, theme: opt.id }))}
+                          style={{
+                            padding: '10px 8px',
+                            borderRadius: '12px',
+                            border: selected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                            backgroundColor: selected ? theme.accentBlueSoft : theme.cardSubtle,
+                            color: selected ? theme.accentBlueText : theme.textPrimary,
+                            fontWeight: 700,
+                            fontSize: '13px',
+                            cursor: 'pointer',
+                            transition: `all 0.22s ${iosEase}`,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              )}
+              </div>
             </section>
 
             {/* 3. CUENTAS Y PLATA */}
@@ -2662,136 +2776,138 @@ export default function App() {
                 </span>
               </button>
 
-              {openSections.cuentas && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {data.accounts.length === 0 ? (
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        color: theme.textMuted,
-                        backgroundColor: theme.cardSubtle,
-                        padding: '10px 12px',
-                        borderRadius: '10px',
-                      }}
-                    >
-                      Agrega una cuenta abajo (Ej: <strong>Nequi</strong> y <strong>50.000</strong>).
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {data.accounts.map((acc) => (
-                        <div
-                          key={acc.id}
+              <div className={`smooth-collapse ${openSections.cuentas ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {data.accounts.length === 0 ? (
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          color: theme.textMuted,
+                          backgroundColor: theme.cardSubtle,
+                          padding: '10px 12px',
+                          borderRadius: '10px',
+                        }}
+                      >
+                        Agrega una cuenta abajo (Ej: <strong>Nequi</strong> y <strong>50.000</strong>).
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {data.accounts.map((acc) => (
+                          <div
+                            key={acc.id}
+                            style={{
+                              backgroundColor: theme.cardSubtle,
+                              border: `1px solid ${theme.border}`,
+                              borderRadius: '12px',
+                              padding: '10px 12px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '8px',
+                            }}
+                          >
+                            <span style={{ fontSize: '14px', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {acc.name}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={Number(acc.balance).toLocaleString('es-CO')}
+                                onChange={(e) => handleUpdateAccountBalance(acc.id, e.target.value)}
+                                style={{
+                                  width: '104px',
+                                  minWidth: 0,
+                                  boxSizing: 'border-box',
+                                  textAlign: 'right',
+                                  backgroundColor: theme.inputBg,
+                                  border: `1px solid ${theme.border}`,
+                                  borderRadius: '8px',
+                                  padding: '6px 8px',
+                                  color: theme.textPrimary,
+                                  fontSize: '13px',
+                                  fontWeight: 700,
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => requestDeleteAccount(acc)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: theme.danger,
+                                  cursor: 'pointer',
+                                  fontSize: '14px',
+                                  padding: '4px',
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {data.skipAccountDeleteConfirm && (
+                      <div style={{ paddingTop: '2px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowReenableAccPrompt(true)}
                           style={{
-                            backgroundColor: theme.cardSubtle,
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '12px',
-                            padding: '10px 12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '8px',
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            color: theme.accentBlueText,
+                            fontSize: '12px',
+                            textDecoration: 'underline',
+                            cursor: 'pointer',
                           }}
                         >
-                          <span style={{ fontSize: '14px', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {acc.name}
-                          </span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={Number(acc.balance).toLocaleString('es-CO')}
-                              onChange={(e) => handleUpdateAccountBalance(acc.id, e.target.value)}
-                              style={{
-                                width: '104px',
-                                minWidth: 0,
-                                boxSizing: 'border-box',
-                                textAlign: 'right',
-                                backgroundColor: theme.inputBg,
-                                border: `1px solid ${theme.border}`,
-                                borderRadius: '8px',
-                                padding: '6px 8px',
-                                color: theme.textPrimary,
-                                fontSize: '13px',
-                                fontWeight: 700,
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => requestDeleteAccount(acc)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: theme.danger,
-                                cursor: 'pointer',
-                                fontSize: '14px',
-                                padding: '4px',
-                              }}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                          Volver a preguntar al borrar cuenta
+                        </button>
+                      </div>
+                    )}
 
-                  {data.skipAccountDeleteConfirm && (
-                    <div style={{ paddingTop: '2px' }}>
+                    <form onSubmit={handleAddAccount} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
+                        <input
+                          type="text"
+                          placeholder="Ej: Nequi"
+                          value={newAccName}
+                          onChange={(e) => setNewAccName(e.target.value)}
+                          style={baseInputStyle}
+                        />
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="Ej: 50.000"
+                          value={newAccBalance}
+                          onChange={(e) => setNewAccBalance(formatMoneyInput(e.target.value))}
+                          style={baseInputStyle}
+                        />
+                      </div>
                       <button
-                        type="button"
-                        onClick={() => setShowReenableAccPrompt(true)}
+                        type="submit"
                         style={{
-                          background: 'none',
+                          width: '100%',
+                          padding: '10px',
+                          borderRadius: '10px',
                           border: 'none',
-                          padding: 0,
-                          color: theme.accentBlueText,
-                          fontSize: '12px',
-                          textDecoration: 'underline',
+                          backgroundColor: theme.accentBlue,
+                          color: '#FFFFFF',
+                          fontSize: '13px',
+                          fontWeight: 700,
                           cursor: 'pointer',
                         }}
                       >
-                        Volver a preguntar al borrar cuenta
+                        + Agregar cuenta
                       </button>
-                    </div>
-                  )}
-
-                  <form onSubmit={handleAddAccount} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
-                      <input
-                        type="text"
-                        placeholder="Ej: Nequi"
-                        value={newAccName}
-                        onChange={(e) => setNewAccName(e.target.value)}
-                        style={baseInputStyle}
-                      />
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="Ej: 50.000"
-                        value={newAccBalance}
-                        onChange={(e) => setNewAccBalance(formatMoneyInput(e.target.value))}
-                        style={baseInputStyle}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      style={{
-                        width: '100%',
-                        padding: '10px',
-                        borderRadius: '10px',
-                        border: 'none',
-                        backgroundColor: theme.accentBlue,
-                        color: '#FFFFFF',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      + Agregar cuenta
-                    </button>
-                  </form>
+                    </form>
+                  </div>
                 </div>
-              )}
+              </div>
             </section>
 
             {/* 4. CATEGORÍAS */}
@@ -2826,142 +2942,143 @@ export default function App() {
                 </span>
               </button>
 
-              {openSections.categorias && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {data.categories.length === 0 ? (
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        color: theme.textMuted,
-                        backgroundColor: theme.cardSubtle,
-                        padding: '10px 12px',
-                        borderRadius: '10px',
-                      }}
-                    >
-                      Agrega una categoría. Elegir un ícono es opcional (puedes dejar <strong>✕</strong> sin ícono).
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                      {data.categories.map((cat) => (
-                        <div
-                          key={cat.id}
+              <div className={`smooth-collapse ${openSections.categorias ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {data.categories.length === 0 ? (
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          color: theme.textMuted,
+                          backgroundColor: theme.cardSubtle,
+                          padding: '10px 12px',
+                          borderRadius: '10px',
+                        }}
+                      >
+                        Agrega una categoría. Elegir un ícono es opcional (puedes dejar <strong>✕</strong> sin ícono).
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {data.categories.map((cat) => (
+                          <div
+                            key={cat.id}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              backgroundColor: theme.cardSubtle,
+                              border: `1px solid ${theme.border}`,
+                              borderRadius: '999px',
+                              padding: '6px 12px',
+                              fontSize: '13px',
+                            }}
+                          >
+                            {cat.icon && cat.icon !== 'none' ? (
+                              <CategoryGlyph iconId={cat.icon} size={14} color={theme.textSecondary} />
+                            ) : null}
+                            <span>{cat.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => requestDeleteCategory(cat)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: theme.textMuted,
+                                cursor: 'pointer',
+                                fontSize: '13px',
+                                padding: 0,
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {data.skipCategoryDeleteConfirm && (
+                      <div style={{ paddingTop: '2px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowReenableCatPrompt(true)}
                           style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            backgroundColor: theme.cardSubtle,
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '999px',
-                            padding: '6px 12px',
-                            fontSize: '13px',
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            color: theme.accentBlueText,
+                            fontSize: '12px',
+                            textDecoration: 'underline',
+                            cursor: 'pointer',
                           }}
                         >
-                          {cat.icon && cat.icon !== 'none' ? (
-                            <CategoryGlyph iconId={cat.icon} size={14} color={theme.textSecondary} />
-                          ) : null}
-                          <span>{cat.name}</span>
-                          <button
-                            type="button"
-                            onClick={() => requestDeleteCategory(cat)}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: theme.textMuted,
-                              cursor: 'pointer',
-                              fontSize: '13px',
-                              padding: 0,
-                            }}
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                          Volver a preguntar
+                        </button>
+                      </div>
+                    )}
 
-                  {data.skipCategoryDeleteConfirm && (
-                    <div style={{ paddingTop: '2px' }}>
-                      <button
-                        type="button"
-                        onClick={() => setShowReenableCatPrompt(true)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          padding: 0,
-                          color: theme.accentBlueText,
-                          fontSize: '12px',
-                          textDecoration: 'underline',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Volver a preguntar
-                      </button>
-                    </div>
-                  )}
+                    <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {ICON_OPTIONS.map((ic) => {
+                          const active = newCatIcon === ic.id;
+                          return (
+                            <button
+                              key={ic.id}
+                              type="button"
+                              title={ic.label}
+                              onClick={() => setNewCatIcon(ic.id)}
+                              style={{
+                                width: '34px',
+                                height: '34px',
+                                borderRadius: '10px',
+                                border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                                backgroundColor: active ? theme.accentBlueSoft : theme.inputBg,
+                                color: active ? theme.accentBlueText : theme.textSecondary,
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              {ic.id === 'none' ? '✕' : <CategoryGlyph iconId={ic.id} size={16} color="currentColor" />}
+                            </button>
+                          );
+                        })}
+                      </div>
 
-                  <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {ICON_OPTIONS.map((ic) => {
-                        const active = newCatIcon === ic.id;
-                        return (
-                          <button
-                            key={ic.id}
-                            type="button"
-                            title={ic.label}
-                            onClick={() => setNewCatIcon(ic.id)}
-                            style={{
-                              width: '34px',
-                              height: '34px',
-                              borderRadius: '10px',
-                              border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
-                              backgroundColor: active ? theme.accentBlueSoft : theme.inputBg,
-                              color: active ? theme.accentBlueText : theme.textSecondary,
-                              fontSize: '12px',
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              transition: `all 0.2s ${iosEase}`,
-                            }}
-                          >
-                            {ic.id === 'none' ? '✕' : <CategoryGlyph iconId={ic.id} size={16} color="currentColor" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <input
-                        type="text"
-                        placeholder="Ej: Gastos del carro"
-                        value={newCatName}
-                        onChange={(e) => setNewCatName(e.target.value)}
-                        style={{ ...baseInputStyle, flex: 1 }}
-                      />
-                      <button
-                        type="submit"
-                        style={{
-                          padding: '10px 14px',
-                          borderRadius: '10px',
-                          border: 'none',
-                          backgroundColor: theme.accentBlue,
-                          color: '#FFFFFF',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        + Agregar
-                      </button>
-                    </div>
-                  </form>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input
+                          type="text"
+                          placeholder="Ej: Gastos del carro"
+                          value={newCatName}
+                          onChange={(e) => setNewCatName(e.target.value)}
+                          style={{ ...baseInputStyle, flex: 1 }}
+                        />
+                        <button
+                          type="submit"
+                          style={{
+                            padding: '10px 14px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            backgroundColor: theme.accentBlue,
+                            color: '#FFFFFF',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          + Agregar
+                        </button>
+                      </div>
+                    </form>
+                  </div>
                 </div>
-              )}
+              </div>
             </section>
 
-            {/* 5. DEUDAS (modificables en nombre y valor + borrar con "no volver a preguntar") */}
+            {/* 5. DEUDAS (modificables + reordenables + semáforo top 3 + borrar con "no volver a preguntar") */}
             <section
               style={{
                 background: theme.card,
@@ -2991,149 +3108,210 @@ export default function App() {
                 </span>
               </button>
 
-              {openSections.deudas && (
-                <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {data.debts.length === 0 ? (
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        color: theme.textMuted,
-                        backgroundColor: theme.cardSubtle,
-                        padding: '10px 12px',
-                        borderRadius: '10px',
-                      }}
-                    >
-                      Agrega una deuda abajo (Ej: <strong>Tarjeta</strong> y <strong>200.000</strong>).
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {data.debts.map((debt) => (
-                        <div
-                          key={debt.id}
-                          style={{
-                            backgroundColor: theme.cardSubtle,
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '12px',
-                            padding: '10px 12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '8px',
-                          }}
-                        >
-                          <input
-                            type="text"
-                            value={debt.name}
-                            onChange={(e) => handleUpdateDebtName(debt.id, e.target.value)}
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              backgroundColor: theme.inputBg,
-                              border: `1px solid ${theme.border}`,
-                              borderRadius: '8px',
-                              padding: '6px 8px',
-                              color: theme.textPrimary,
-                              fontSize: '13px',
-                              fontWeight: 600,
-                            }}
-                          />
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={Number(debt.amount).toLocaleString('es-CO')}
-                              onChange={(e) => handleUpdateDebtAmount(debt.id, e.target.value)}
+              <div className={`smooth-collapse ${openSections.deudas ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {data.debts.length === 0 ? (
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          color: theme.textMuted,
+                          backgroundColor: theme.cardSubtle,
+                          padding: '10px 12px',
+                          borderRadius: '10px',
+                        }}
+                      >
+                        Agrega una deuda abajo (Ej: <strong>Tarjeta</strong> y <strong>200.000</strong>).
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {data.debts.map((debt, idx) => {
+                          const dStyle = getDebtRankStyle(idx);
+                          return (
+                            <div
+                              key={debt.id}
                               style={{
-                                width: '100px',
-                                minWidth: 0,
-                                boxSizing: 'border-box',
-                                textAlign: 'right',
-                                backgroundColor: theme.inputBg,
-                                border: `1px solid ${theme.border}`,
-                                borderRadius: '8px',
-                                padding: '6px 8px',
-                                color: theme.danger,
-                                fontSize: '13px',
-                                fontWeight: 700,
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => requestDeleteDebt(debt)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: theme.textMuted,
-                                cursor: 'pointer',
-                                fontSize: '14px',
-                                padding: '4px',
+                                backgroundColor: theme.cardSubtle,
+                                border: `1px solid ${dStyle.border}`,
+                                borderRadius: '12px',
+                                padding: '10px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '6px',
                               }}
                             >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                              <span
+                                style={{
+                                  width: '20px',
+                                  height: '20px',
+                                  borderRadius: '50%',
+                                  backgroundColor: dStyle.badgeBg,
+                                  color: dStyle.badgeColor,
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {idx + 1}
+                              </span>
 
-                  {data.skipDebtDeleteConfirm && (
-                    <div style={{ paddingTop: '2px' }}>
+                              <input
+                                type="text"
+                                value={debt.name}
+                                onChange={(e) => handleUpdateDebtName(debt.id, e.target.value)}
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  backgroundColor: theme.inputBg,
+                                  border: `1px solid ${theme.border}`,
+                                  borderRadius: '8px',
+                                  padding: '6px 8px',
+                                  color: theme.textPrimary,
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                }}
+                              />
+
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={Number(debt.amount).toLocaleString('es-CO')}
+                                onChange={(e) => handleUpdateDebtAmount(debt.id, e.target.value)}
+                                style={{
+                                  width: '86px',
+                                  minWidth: 0,
+                                  boxSizing: 'border-box',
+                                  textAlign: 'right',
+                                  backgroundColor: theme.inputBg,
+                                  border: `1px solid ${theme.border}`,
+                                  borderRadius: '8px',
+                                  padding: '6px 7px',
+                                  color: dStyle.amountColor,
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                }}
+                              />
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() => reorderDebts(idx, idx - 1)}
+                                  style={{
+                                    width: '24px',
+                                    height: '24px',
+                                    borderRadius: '6px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.inputBg,
+                                    color: theme.textPrimary,
+                                    opacity: idx === 0 ? 0.35 : 1,
+                                    fontSize: '11px',
+                                    cursor: idx === 0 ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === data.debts.length - 1}
+                                  onClick={() => reorderDebts(idx, idx + 1)}
+                                  style={{
+                                    width: '24px',
+                                    height: '24px',
+                                    borderRadius: '6px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.inputBg,
+                                    color: theme.textPrimary,
+                                    opacity: idx === data.debts.length - 1 ? 0.35 : 1,
+                                    fontSize: '11px',
+                                    cursor: idx === data.debts.length - 1 ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  ↓
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => requestDeleteDebt(debt)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: theme.textMuted,
+                                    cursor: 'pointer',
+                                    fontSize: '13px',
+                                    padding: '2px 4px',
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {data.skipDebtDeleteConfirm && (
+                      <div style={{ paddingTop: '2px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowReenableDebtPrompt(true)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            color: theme.accentBlueText,
+                            fontSize: '12px',
+                            textDecoration: 'underline',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Volver a preguntar al borrar deuda
+                        </button>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleAddDebt} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
+                        <input
+                          type="text"
+                          placeholder="Ej: Tarjeta"
+                          value={newDebtName}
+                          onChange={(e) => setNewDebtName(e.target.value)}
+                          style={baseInputStyle}
+                        />
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="Ej: 200.000"
+                          value={newDebtAmount}
+                          onChange={(e) => setNewDebtAmount(formatMoneyInput(e.target.value))}
+                          style={baseInputStyle}
+                        />
+                      </div>
                       <button
-                        type="button"
-                        onClick={() => setShowReenableDebtPrompt(true)}
+                        type="submit"
                         style={{
-                          background: 'none',
+                          width: '100%',
+                          padding: '10px',
+                          borderRadius: '10px',
                           border: 'none',
-                          padding: 0,
-                          color: theme.accentBlueText,
-                          fontSize: '12px',
-                          textDecoration: 'underline',
+                          backgroundColor: theme.accentBlue,
+                          color: '#FFFFFF',
+                          fontSize: '13px',
+                          fontWeight: 700,
                           cursor: 'pointer',
                         }}
                       >
-                        Volver a preguntar al borrar deuda
+                        + Agregar deuda
                       </button>
-                    </div>
-                  )}
-
-                  <form onSubmit={handleAddDebt} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
-                      <input
-                        type="text"
-                        placeholder="Ej: Tarjeta"
-                        value={newDebtName}
-                        onChange={(e) => setNewDebtName(e.target.value)}
-                        style={baseInputStyle}
-                      />
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="Ej: 200.000"
-                        value={newDebtAmount}
-                        onChange={(e) => setNewDebtAmount(formatMoneyInput(e.target.value))}
-                        style={baseInputStyle}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      style={{
-                        width: '100%',
-                        padding: '10px',
-                        borderRadius: '10px',
-                        border: 'none',
-                        backgroundColor: theme.accentBlue,
-                        color: '#FFFFFF',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      + Agregar deuda
-                    </button>
-                  </form>
+                    </form>
+                  </div>
                 </div>
-              )}
+              </div>
             </section>
 
             {/* Botón directo al final: Descargar PDF */}
@@ -3230,189 +3408,6 @@ export default function App() {
                 Sí, eliminar
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ================= MODAL GESTIÓN / ABONO DE DEUDAS ================= */}
-      {showDebtModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 55,
-            backgroundColor: 'rgba(0, 0, 0, 0.78)',
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            className="ios-sheet-enter"
-            style={{
-              width: '100%',
-              maxWidth: '480px',
-              backgroundColor: theme.cardSolid,
-              borderTop: `1px solid ${theme.borderStrong}`,
-              borderRadius: '24px 24px 0 0',
-              padding: '20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-              boxSizing: 'border-box',
-              maxHeight: '88dvh',
-              overflowY: 'auto',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: '16px', fontWeight: 700 }}>Abonar a deudas</div>
-                <div style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  Al llegar a {formatMoneyByCurrency(0, currency)} se elimina y te avisa
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowDebtModal(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: theme.textSecondary,
-                  fontSize: '18px',
-                  cursor: 'pointer',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {debtPayError && (
-              <div
-                style={{
-                  backgroundColor: theme.dangerBg,
-                  border: `1px solid ${theme.danger}`,
-                  color: theme.danger,
-                  borderRadius: '12px',
-                  padding: '10px 12px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                }}
-              >
-                {debtPayError}
-              </div>
-            )}
-
-            {data.debts.length === 0 ? (
-              <div
-                style={{
-                  backgroundColor: theme.cardSubtle,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '14px',
-                  padding: '18px',
-                  textAlign: 'center',
-                  fontSize: '13px',
-                  color: theme.textMuted,
-                }}
-              >
-                No tienes deudas activas en este momento.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {data.debts.map((debt) => (
-                  <div
-                    key={debt.id}
-                    style={{
-                      backgroundColor: theme.cardSubtle,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '14px',
-                      padding: '12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '8px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 700 }}>{debt.name}</span>
-                      <span style={{ fontSize: '14px', fontWeight: 800, color: theme.danger }}>
-                        {renderMoney(debt.amount)}
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px' }}>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="Abonar (Ej: 50.000)"
-                        value={payAmounts[debt.id] || ''}
-                        onChange={(e) => {
-                          setPayAmounts((prev) => ({
-                            ...prev,
-                            [debt.id]: formatMoneyInput(e.target.value),
-                          }));
-                          if (debtPayError) setDebtPayError('');
-                        }}
-                        style={baseInputStyle}
-                      />
-                      <select
-                        value={payAccounts[debt.id] || ''}
-                        onChange={(e) => {
-                          setPayAccounts((prev) => ({ ...prev, [debt.id]: e.target.value }));
-                          if (debtPayError) setDebtPayError('');
-                        }}
-                        style={baseInputStyle}
-                      >
-                        <option value="">Desde cuenta (opc.)</option>
-                        {data.accounts.map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.name} ({formatMoneyByCurrency(acc.balance, currency)})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handlePayDebt(debt)}
-                      style={{
-                        width: '100%',
-                        padding: '10px',
-                        borderRadius: '10px',
-                        border: 'none',
-                        backgroundColor: theme.accentBlue,
-                        color: '#FFFFFF',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Abonar
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setShowDebtModal(false);
-                setActiveTab('config');
-                setOpenSections((s) => ({ ...s, deudas: true }));
-              }}
-              style={{
-                width: '100%',
-                padding: '11px',
-                borderRadius: '12px',
-                border: `1px solid ${theme.borderStrong}`,
-                backgroundColor: 'transparent',
-                color: theme.textSecondary,
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Crear o editar deudas en Configuración
-            </button>
           </div>
         </div>
       )}
@@ -3551,7 +3546,6 @@ export default function App() {
                   color: txType === 'gasto' ? theme.danger : theme.textSecondary,
                   fontWeight: 700,
                   cursor: 'pointer',
-                  transition: `all 0.2s ${iosEase}`,
                 }}
               >
                 Gasto
@@ -3570,7 +3564,6 @@ export default function App() {
                   color: txType === 'ingreso' ? theme.success : theme.textSecondary,
                   fontWeight: 700,
                   cursor: 'pointer',
-                  transition: `all 0.2s ${iosEase}`,
                 }}
               >
                 Ingreso
@@ -3648,7 +3641,6 @@ export default function App() {
                         fontSize: '13px',
                         fontWeight: selected ? 700 : 500,
                         cursor: 'pointer',
-                        transition: `all 0.2s ${iosEase}`,
                       }}
                     >
                       {cat.icon && cat.icon !== 'none' ? (
