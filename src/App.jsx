@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.15';
+const APP_VERSION = 'v1.0.16';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
+  'artpay_data_v15',
   'artpay_data_v14',
   'artpay_data_v13',
   'artpay_data_v12',
@@ -1166,6 +1167,106 @@ export default function App() {
   };
 
   const handleTriggerSavePDF = () => {
+    const rowsHtml = data.transactions
+      .map(
+        (t) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.categoryName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.accountName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${formatDateTimeLabel(t.date)}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;text-align:right;font-weight:700;">${
+            t.type === 'ingreso' ? '+' : t.type === 'gasto' ? '-' : '⇄ '
+          }${formatMoneyByCurrency(t.amount, currency)}</td>
+        </tr>`
+      )
+      .join('');
+
+    const accountsHtml = data.accounts
+      .map(
+        (a) =>
+          `<li><strong>${a.name}</strong>: ${formatMoneyByCurrency(a.balance, currency)}</li>`
+      )
+      .join('');
+
+    const debtsHtml = data.debts
+      .map(
+        (d, idx) =>
+          `<li>#${idx + 1} <strong>${d.name}</strong>: ${formatMoneyByCurrency(d.amount, currency)}</li>`
+      )
+      .join('');
+
+    const wishesHtml = data.wishes
+      .map(
+        (w, idx) =>
+          `<li>#${idx + 1} <strong>${w.name}</strong>: ${formatMoneyByCurrency(w.price, currency)}</li>`
+      )
+      .join('');
+
+    const printWin = window.open('', '_blank', 'width=720,height=860');
+    if (printWin) {
+      printWin.document.write(`
+        <html>
+          <head>
+            <title>ArtPay - Reporte PDF</title>
+            <style>
+              body { font-family: -apple-system, Arial, sans-serif; padding: 24px; color: #0f172a; }
+              h1 { margin: 0 0 4px; font-size: 22px; }
+              .meta { color: #475569; font-size: 13px; margin-bottom: 16px; }
+              .box { border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+              h3 { margin: 0 0 8px; font-size: 15px; }
+              ul { margin: 0; padding-left: 18px; }
+              li { margin-bottom: 4px; font-size: 13px; }
+              table { width: 100%; border-collapse: collapse; font-size: 12px; }
+              th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #94a3b8; }
+            </style>
+          </head>
+          <body>
+            <h1>ArtPay — Reporte Financiero (${currency})</h1>
+            <div class="meta">${data.userName ? `Usuario: ${data.userName} • ` : ''}${new Date().toLocaleDateString('es-CO')} • ${APP_VERSION}</div>
+            <div class="box">
+              <div><strong>Plata disponible:</strong> ${formatMoneyByCurrency(totalAvailable, currency)} ${currency}</div>
+              <div><strong>Deudas totales:</strong> ${formatMoneyByCurrency(totalDebts, currency)} ${currency}</div>
+              <div><strong>Ingresos hoy:</strong> +${formatMoneyByCurrency(todayIncome, currency)}</div>
+              <div><strong>Gastos hoy:</strong> -${formatMoneyByCurrency(todayExpense, currency)}</div>
+            </div>
+            <div class="box">
+              <h3>Cuentas</h3>
+              <ul>${accountsHtml || '<li>Sin cuentas</li>'}</ul>
+            </div>
+            <div class="box">
+              <h3>Deudas</h3>
+              <ul>${debtsHtml || '<li>Sin deudas</li>'}</ul>
+            </div>
+            <div class="box">
+              <h3>Lista de deseos</h3>
+              <ul>${wishesHtml || '<li>Sin deseos</li>'}</ul>
+            </div>
+            <div class="box">
+              <h3>Movimientos</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Categoría</th>
+                    <th>Cuenta</th>
+                    <th>Fecha y hora</th>
+                    <th style="text-align:right;">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>${rowsHtml || '<tr><td colspan="4" style="padding:8px;">Sin movimientos</td></tr>'}</tbody>
+              </table>
+            </div>
+            <script>
+              window.onload = function() {
+                setTimeout(function() { window.print(); }, 200);
+              };
+            </script>
+          </body>
+        </html>
+      `);
+      printWin.document.close();
+      return;
+    }
+
     if (typeof window !== 'undefined' && typeof window.print === 'function') {
       window.print();
     }
@@ -1857,9 +1958,7 @@ export default function App() {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  openOnlySectionInConfig('perfil');
-                }}
+                onClick={() => openOnlySectionInConfig('perfil')}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -2207,8 +2306,26 @@ export default function App() {
               </div>
             </section>
 
-            {/* Botones de acción: Registrar movimiento + Transferir entre cuentas */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '8px' }}>
+            {/* Botones de acción: Transferir a la izquierda y Registrar movimiento a la derecha */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.35fr', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={openTransferDialog}
+                style={{
+                  width: '100%',
+                  padding: '14px 10px',
+                  borderRadius: '16px',
+                  border: `1.5px solid ${theme.accentBlue}`,
+                  backgroundColor: theme.accentBlueSoft,
+                  color: theme.accentBlueText,
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                ⇄ Transferir
+              </button>
+
               <button
                 type="button"
                 onClick={openTransactionModal}
@@ -2230,24 +2347,6 @@ export default function App() {
                 }}
               >
                 <span style={{ fontSize: '18px', lineHeight: 1 }}>+</span> Registrar movimiento
-              </button>
-
-              <button
-                type="button"
-                onClick={openTransferDialog}
-                style={{
-                  width: '100%',
-                  padding: '14px 10px',
-                  borderRadius: '16px',
-                  border: `1.5px solid ${theme.accentBlue}`,
-                  backgroundColor: theme.accentBlueSoft,
-                  color: theme.accentBlueText,
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                ⇄ Transferir
               </button>
             </div>
 
@@ -2342,7 +2441,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Filtros rápidos */}
             <div
               style={{
                 background: theme.card,
@@ -4023,7 +4121,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* 6. EDITAR SUSCRIPCIONES */}
+            {/* 6. EDITAR SUSCRIPCIONES (CON ETIQUETAS CLARAS DE PARA QUÉ ES CADA CAMPO) */}
             <section
               style={{
                 background: theme.card,
@@ -4074,47 +4172,74 @@ export default function App() {
                             gap: '8px',
                           }}
                         >
-                          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '6px' }}>
-                            <input
-                              type="text"
-                              value={sub.name}
-                              onChange={(e) => handleUpdateSubscription(sub.id, { name: e.target.value })}
-                              style={baseInputStyle}
-                            />
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={Number(sub.price).toLocaleString('es-CO')}
-                              onChange={(e) =>
-                                handleUpdateSubscription(sub.id, { price: parseMoneyInput(e.target.value) })
-                              }
-                              style={baseInputStyle}
-                            />
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: theme.accentBlueText }}>
+                            Editar suscripción: {sub.name || 'Sin nombre'}
                           </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 1.4fr', gap: '6px' }}>
-                            <input
-                              type="number"
-                              min="1"
-                              max="31"
-                              value={sub.billingDay}
-                              onChange={(e) =>
-                                handleUpdateSubscription(sub.id, {
-                                  billingDay: Math.max(1, Math.min(31, Number(e.target.value) || 1)),
-                                })
-                              }
-                              style={baseInputStyle}
-                            />
-                            <select
-                              value={sub.accountId}
-                              onChange={(e) => handleUpdateSubscription(sub.id, { accountId: e.target.value })}
-                              style={baseInputStyle}
-                            >
-                              {data.accounts.map((acc) => (
-                                <option key={acc.id} value={acc.id}>
-                                  {acc.name}
-                                </option>
-                              ))}
-                            </select>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '8px' }}>
+                            <div>
+                              <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
+                                Nombre de la suscripción
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Nombre"
+                                value={sub.name}
+                                onChange={(e) => handleUpdateSubscription(sub.id, { name: e.target.value })}
+                                style={baseInputStyle}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
+                                Valor del cobro
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="Valor"
+                                value={Number(sub.price).toLocaleString('es-CO')}
+                                onChange={(e) =>
+                                  handleUpdateSubscription(sub.id, { price: parseMoneyInput(e.target.value) })
+                                }
+                                style={baseInputStyle}
+                              />
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '0.85fr 1.35fr', gap: '8px' }}>
+                            <div>
+                              <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
+                                Día de cobro (1-31)
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="31"
+                                value={sub.billingDay}
+                                onChange={(e) =>
+                                  handleUpdateSubscription(sub.id, {
+                                    billingDay: Math.max(1, Math.min(31, Number(e.target.value) || 1)),
+                                  })
+                                }
+                                style={baseInputStyle}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
+                                Cuenta que paga
+                              </label>
+                              <select
+                                value={sub.accountId}
+                                onChange={(e) => handleUpdateSubscription(sub.id, { accountId: e.target.value })}
+                                style={baseInputStyle}
+                              >
+                                {data.accounts.map((acc) => (
+                                  <option key={acc.id} value={acc.id}>
+                                    {acc.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                           </div>
                         </div>
                       ))
@@ -4124,7 +4249,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* 7. EDITAR DESEOS */}
+            {/* 7. EDITAR DESEOS (CON ETIQUETAS CLARAS DE PARA QUÉ ES CADA CAMPO) */}
             <section
               style={{
                 background: theme.card,
@@ -4170,24 +4295,41 @@ export default function App() {
                             border: `1px solid ${theme.border}`,
                             borderRadius: '12px',
                             padding: '10px',
-                            display: 'grid',
-                            gridTemplateColumns: '1.3fr 1fr',
+                            display: 'flex',
+                            flexDirection: 'column',
                             gap: '6px',
                           }}
                         >
-                          <input
-                            type="text"
-                            value={w.name}
-                            onChange={(e) => handleUpdateWish(w.id, { name: e.target.value })}
-                            style={baseInputStyle}
-                          />
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={Number(w.price).toLocaleString('es-CO')}
-                            onChange={(e) => handleUpdateWish(w.id, { price: parseMoneyInput(e.target.value) })}
-                            style={baseInputStyle}
-                          />
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: theme.accentBlueText }}>
+                            Editar deseo: {w.name || 'Sin nombre'}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '8px' }}>
+                            <div>
+                              <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
+                                Nombre del deseo
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Nombre del deseo"
+                                value={w.name}
+                                onChange={(e) => handleUpdateWish(w.id, { name: e.target.value })}
+                                style={baseInputStyle}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
+                                Precio estimado
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="Precio"
+                                value={Number(w.price).toLocaleString('es-CO')}
+                                onChange={(e) => handleUpdateWish(w.id, { price: parseMoneyInput(e.target.value) })}
+                                style={baseInputStyle}
+                              />
+                            </div>
+                          </div>
                         </div>
                       ))
                     )}
@@ -4271,6 +4413,28 @@ export default function App() {
                 ✕
               </button>
             </div>
+
+            {data.accounts.length >= 2 && (() => {
+              const fromA = data.accounts.find((a) => a.id === transferFromId);
+              const toA = data.accounts.find((a) => a.id === transferToId);
+              const amtPreview = parseMoneyInput(transferAmount);
+              return (
+                <div
+                  style={{
+                    backgroundColor: theme.cardSubtle,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '12px',
+                    padding: '10px 12px',
+                    fontSize: '12px',
+                    color: theme.textSecondary,
+                  }}
+                >
+                  Vas a pasar{' '}
+                  <strong style={{ color: theme.accentBlueText }}>{formatMoneyByCurrency(amtPreview, currency)}</strong>{' '}
+                  desde <strong>{fromA?.name || '—'}</strong> hacia <strong>{toA?.name || '—'}</strong>.
+                </div>
+              );
+            })()}
 
             {transferError && (
               <div
