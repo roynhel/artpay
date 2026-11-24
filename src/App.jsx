@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v12';
+const STORAGE_KEY = 'artpay_data_v13';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -237,9 +237,17 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [accountsExpanded, setAccountsExpanded] = useState(true);
 
-  // Apartado/modal dedicado de Deudas
+  // Apartado/modal dedicado de Deudas + selección de deuda para abonar al tocarla
   const [showDebtSectionModal, setShowDebtSectionModal] = useState(false);
+  const [selectedDebtForPayment, setSelectedDebtForPayment] = useState(null);
+  const [debtPayInput, setDebtPayInput] = useState('');
+  const [debtPayAccountId, setDebtPayAccountId] = useState('');
+  const [debtPayFeedback, setDebtPayFeedback] = useState('');
 
+  // Vista/modal de PDF con botón para regresar
+  const [showPdfPreviewModal, setShowPdfPreviewModal] = useState(false);
+
+  const [celebrationBanner, setCelebrationBanner] = useState('');
   const [noAccountAlert, setNoAccountAlert] = useState(false);
 
   // Confirmaciones obligatorias sin "No volver a preguntar" (movimientos, suscripciones y deseos)
@@ -288,13 +296,13 @@ export default function App() {
   const [txNote, setTxNote] = useState('');
   const [txError, setTxError] = useState('');
 
-  // Secciones minimizables en Configuración
+  // Secciones en Configuración: todas cerradas por defecto
   const [openSections, setOpenSections] = useState({
-    perfil: true,
-    apariencia: true,
-    cuentas: true,
-    categorias: true,
-    deudas: true,
+    perfil: false,
+    apariencia: false,
+    cuentas: false,
+    categorias: false,
+    deudas: false,
   });
 
   // Secciones en Estadísticas: abiertas por defecto
@@ -303,13 +311,19 @@ export default function App() {
     ingresosCat: true,
   });
 
-  // Inputs de Configuración
+  // Inputs y avisos de validación en Configuración y Deseos
   const [newAccName, setNewAccName] = useState('');
   const [newAccBalance, setNewAccBalance] = useState('');
+  const [accFormAlert, setAccFormAlert] = useState('');
+
   const [newCatName, setNewCatName] = useState('');
   const [newCatIcon, setNewCatIcon] = useState('none');
+  const [catFormAlert, setCatFormAlert] = useState('');
+
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
+  const [debtFormAlert, setDebtFormAlert] = useState('');
+
   const [configNotice, setConfigNotice] = useState('');
 
   // Confirmaciones de borrado en Configuración
@@ -330,6 +344,7 @@ export default function App() {
   // Inputs y reordenamiento de Deseos
   const [wishName, setWishName] = useState('');
   const [wishPrice, setWishPrice] = useState('');
+  const [wishFormAlert, setWishFormAlert] = useState('');
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const touchStartY = useRef(0);
@@ -351,7 +366,10 @@ export default function App() {
     if (data.accounts.length > 0 && !subAccountId) {
       setSubAccountId(data.accounts[0].id);
     }
-  }, [data.accounts, subAccountId]);
+    if (data.accounts.length > 0 && !debtPayAccountId) {
+      setDebtPayAccountId(data.accounts[0].id);
+    }
+  }, [data.accounts, subAccountId, debtPayAccountId]);
 
   const isDark = data.theme === 'system' ? systemPrefersDark : data.theme === 'dark';
   const currency = data.currency || 'COP';
@@ -409,10 +427,91 @@ export default function App() {
     setOpenSections((s) => ({ ...s, cuentas: true }));
   };
 
+  // --- Abonar tocando una deuda ---
+  const openPayForDebt = (debt) => {
+    setSelectedDebtForPayment(debt);
+    setDebtPayInput('');
+    setDebtPayAccountId(data.accounts[0]?.id || '');
+    setDebtPayFeedback('');
+  };
+
+  const handleConfirmDebtPayment = (e) => {
+    e.preventDefault();
+    if (!selectedDebtForPayment) return;
+    setDebtPayFeedback('');
+
+    const payVal = parseMoneyInput(debtPayInput);
+    if (!payVal || payVal <= 0) {
+      setDebtPayFeedback('Escribe cuánto vas a abonar.');
+      return;
+    }
+
+    const chosenAcc = data.accounts.find((a) => a.id === debtPayAccountId) || data.accounts[0];
+    if (!chosenAcc) {
+      setDebtPayFeedback('Agrega una cuenta en Configuración para descontar el abono.');
+      return;
+    }
+
+    const accBal = Number(chosenAcc.balance) || 0;
+    if (payVal > accBal) {
+      setDebtPayFeedback(
+        `No alcanza el saldo en ${chosenAcc.name} (${formatMoneyByCurrency(accBal, currency)}).`
+      );
+      return;
+    }
+
+    const currentDebtAmt = Number(selectedDebtForPayment.amount) || 0;
+    const actualPaid = Math.min(currentDebtAmt, payVal);
+    const remainingDebt = Math.max(0, currentDebtAmt - actualPaid);
+
+    const updatedAccounts = data.accounts.map((a) =>
+      a.id === chosenAcc.id ? { ...a, balance: Math.max(0, accBal - actualPaid) } : a
+    );
+
+    const newTx = {
+      id: Date.now().toString(),
+      type: 'gasto',
+      amount: actualPaid,
+      accountId: chosenAcc.id,
+      accountName: chosenAcc.name,
+      categoryName: `Abono deuda: ${selectedDebtForPayment.name}`,
+      categoryIcon: 'none',
+      note: remainingDebt === 0 ? 'Deuda saldada' : 'Abono a deuda',
+      date: new Date().toISOString(),
+    };
+
+    const nextDebts =
+      remainingDebt === 0
+        ? data.debts.filter((d) => d.id !== selectedDebtForPayment.id)
+        : data.debts.map((d) => (d.id === selectedDebtForPayment.id ? { ...d, amount: remainingDebt } : d));
+
+    setData((prev) => ({
+      ...prev,
+      accounts: updatedAccounts,
+      debts: nextDebts,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    const paidDebtName = selectedDebtForPayment.name;
+    setSelectedDebtForPayment(null);
+    setDebtPayInput('');
+    setDebtPayFeedback('');
+
+    if (remainingDebt === 0) {
+      setShowDebtSectionModal(false);
+      setCelebrationBanner(`¡Bien hecho! Una deuda menos: "${paidDebtName}" quedó saldada.`);
+      setTimeout(() => setCelebrationBanner(''), 4500);
+    }
+  };
+
   // --- Cuentas ---
   const handleAddAccount = (e) => {
     e.preventDefault();
-    if (!newAccName.trim()) return;
+    setAccFormAlert('');
+    if (!newAccName.trim()) {
+      setAccFormAlert('Debes escribir el nombre de la cuenta para poder agregarla.');
+      return;
+    }
     const balance = parseMoneyInput(newAccBalance);
     const created = {
       id: Date.now().toString(),
@@ -456,7 +555,11 @@ export default function App() {
   // --- Categorías ---
   const handleAddCategory = (e) => {
     e.preventDefault();
-    if (!newCatName.trim()) return;
+    setCatFormAlert('');
+    if (!newCatName.trim()) {
+      setCatFormAlert('Debes escribir un nombre de categoría para poder agregarla.');
+      return;
+    }
     const created = {
       id: Date.now().toString(),
       name: newCatName.trim(),
@@ -488,11 +591,19 @@ export default function App() {
     setCatToDelete(null);
   };
 
-  // --- Deudas (editar nombre y monto + reordenar + borrar con confirmación) ---
+  // --- Deudas ---
   const handleAddDebt = (e) => {
     e.preventDefault();
-    if (!newDebtName.trim()) return;
+    setDebtFormAlert('');
+    if (!newDebtName.trim()) {
+      setDebtFormAlert('Debes escribir el nombre de la deuda para poder agregarla.');
+      return;
+    }
     const amount = parseMoneyInput(newDebtAmount);
+    if (!amount || amount <= 0) {
+      setDebtFormAlert('Debes escribir el valor de la deuda para poder agregarla.');
+      return;
+    }
     const created = {
       id: Date.now().toString(),
       name: newDebtName.trim(),
@@ -796,7 +907,7 @@ export default function App() {
     return groups;
   }, [data.transactions]);
 
-  // --- Exportar / Importar / Descargar PDF ---
+  // --- Exportar / Importar / PDF ---
   const handleExportData = () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -827,75 +938,60 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleDownloadPDF = () => {
-    const rowsHtml = data.transactions
-      .slice(0, 30)
-      .map(
-        (t) => `
-        <tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryName}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.accountName}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${formatDateTimeLabel(t.date)}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">${formatMoneyByCurrency(t.amount, currency)}</td>
-        </tr>`
-      )
-      .join('');
+  const handleTriggerSavePDF = () => {
+    try {
+      window.print();
+    } catch {
+      const rowsHtml = data.transactions
+        .slice(0, 30)
+        .map(
+          (t) => `
+          <tr>
+            <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.categoryName}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${t.accountName}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${formatDateTimeLabel(t.date)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:bold;">${formatMoneyByCurrency(t.amount, currency)}</td>
+          </tr>`
+        )
+        .join('');
 
-    const wishesHtml = data.wishes
-      .map(
-        (w, i) =>
-          `<li style="margin-bottom:4px;">#${i + 1} <strong>${w.name}</strong> — ${formatMoneyByCurrency(w.price, currency)}</li>`
-      )
-      .join('');
-
-    const printWin = window.open('', '_blank', 'width=680,height=800');
-    if (!printWin) return;
-    printWin.document.write(`
-      <html>
-        <head>
-          <title>Reporte ArtPay</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
-            h1 { margin-bottom: 4px; }
-            .grid { display: flex; gap: 16px; margin: 16px 0; }
-            .box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; flex: 1; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-          </style>
-        </head>
-        <body>
-          <h1>ArtPay — Resumen Financiero (${currency})</h1>
-          <p style="color:#64748b;margin-top:0;">${data.userName ? `Usuario: ${data.userName} • ` : ''}Fecha: ${new Date().toLocaleDateString('es-CO')}</p>
-          <div class="grid">
-            <div class="box"><div>Plata disponible</div><strong>${formatMoneyByCurrency(totalAvailable, currency)} ${currency}</strong></div>
-            <div class="box"><div>Deudas</div><strong>${formatMoneyByCurrency(totalDebts, currency)} ${currency}</strong></div>
-            <div class="box"><div>Deseos estimados</div><strong>${formatMoneyByCurrency(data.wishes.reduce((s, w) => s + (Number(w.price) || 0), 0), currency)}</strong></div>
-          </div>
-          <h3>Últimos movimientos</h3>
-          <table>
-            <thead>
-              <tr>
-                <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #94a3b8;">Categoría</th>
-                <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #94a3b8;">Cuenta</th>
-                <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #94a3b8;">Fecha y hora</th>
-                <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #94a3b8;">Valor</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml || '<tr><td colspan="4" style="padding:10px;">Sin movimientos</td></tr>'}</tbody>
-          </table>
-          <h3 style="margin-top:20px;">Lista de deseos</h3>
-          <ol>${wishesHtml || '<li>Sin deseos registrados</li>'}</ol>
-          <script>window.onload = function() { window.print(); };</script>
-        </body>
-      </html>
-    `);
-    printWin.document.close();
+      const printWin = window.open('', '_blank', 'width=680,height=800');
+      if (!printWin) return;
+      printWin.document.write(`
+        <html>
+          <head>
+            <title>Reporte ArtPay</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
+              table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+            </style>
+          </head>
+          <body>
+            <h1>ArtPay — Resumen Financiero (${currency})</h1>
+            <p>Plata disponible: <strong>${formatMoneyByCurrency(totalAvailable, currency)} ${currency}</strong></p>
+            <p>Deudas: <strong>${formatMoneyByCurrency(totalDebts, currency)} ${currency}</strong></p>
+            <table><tbody>${rowsHtml || '<tr><td>Sin movimientos</td></tr>'}</tbody></table>
+            <script>window.onload = function() { window.print(); };</script>
+          </body>
+        </html>
+      `);
+      printWin.document.close();
+    }
   };
 
   // --- Deseos ---
   const handleAddWish = (e) => {
     e.preventDefault();
-    if (!wishName.trim()) return;
+    setWishFormAlert('');
+    if (!wishName.trim()) {
+      setWishFormAlert('Debes escribir el nombre del deseo para poder agregarlo.');
+      return;
+    }
     const price = parseMoneyInput(wishPrice);
+    if (!price || price <= 0) {
+      setWishFormAlert('Debes escribir cuánto cuesta el deseo para poder agregarlo.');
+      return;
+    }
     const created = {
       id: Date.now().toString(),
       name: wishName.trim(),
@@ -1043,7 +1139,6 @@ export default function App() {
 
   const renderMoney = (val) => (hideBalances ? '••••••' : formatMoneyByCurrency(val, currency));
 
-  // Monto grande con código de moneda a 1/4 del tamaño de la letra principal
   const renderBigCurrencyAmount = (val, mainFontPx, colorStyle = null) => {
     if (hideBalances) {
       return <span style={{ fontSize: `${mainFontPx}px`, fontWeight: 800 }}>••••••</span>;
@@ -1081,7 +1176,6 @@ export default function App() {
     );
   };
 
-  // Estadísticas filtradas por día / semana / mes (con reinicio diario para categoría)
   const { expenseByCategory, incomeByCategory, totalAllExpenses, totalAllIncomes, totalCompare } = useMemo(() => {
     const expCat = {};
     const incCat = {};
@@ -1483,7 +1577,24 @@ export default function App() {
         {/* ================= PESTAÑA INICIO ================= */}
         {activeTab === 'inicio' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {/* Cuadro Principal: Plata disponible (cuentas abiertas con animación suave) */}
+            {celebrationBanner && (
+              <div
+                className="ios-screen-enter"
+                style={{
+                  backgroundColor: theme.successBg,
+                  border: `1.5px solid ${theme.success}`,
+                  color: theme.success,
+                  borderRadius: '14px',
+                  padding: '12px 14px',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                }}
+              >
+                {celebrationBanner}
+              </div>
+            )}
+
+            {/* Cuadro Principal: Plata disponible */}
             <section
               style={{
                 background: theme.availableCard,
@@ -1554,7 +1665,6 @@ export default function App() {
                 {renderBigCurrencyAmount(totalAvailable, 32)}
               </div>
 
-              {/* Desplegable de cuentas con animación suave */}
               <div className={`smooth-collapse ${accountsExpanded ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div
@@ -1686,7 +1796,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Deudas (abre apartado/vista de Deudas, total en rojo + código de moneda a 1/4) */}
+            {/* Tarjeta de Deudas */}
             <section
               onClick={() => setShowDebtSectionModal(true)}
               style={{
@@ -1722,7 +1832,7 @@ export default function App() {
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
                   {data.debts.length === 0
                     ? 'Sin deudas • Toca para ver o agregar'
-                    : `${data.debts.length} ${data.debts.length === 1 ? 'deuda activa' : 'deudas activas'} • Toca para ver`}
+                    : `${data.debts.length} ${data.debts.length === 1 ? 'deuda activa' : 'deudas activas'} • Toca para ver o abonar`}
                 </div>
               </div>
 
@@ -1771,7 +1881,7 @@ export default function App() {
               <span style={{ fontSize: '19px', lineHeight: 1 }}>+</span> Registrar movimiento
             </button>
 
-            {/* Movimientos divididos por fecha (sin minimizar, con fecha y hora) */}
+            {/* Movimientos divididos por fecha */}
             <section style={{ marginTop: '4px' }}>
               <div
                 style={{
@@ -1887,7 +1997,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= PESTAÑA ESTADÍSTICAS (ABIERTAS POR DEFECTO + DÍA / SEMANA / MES) ================= */}
+        {/* ================= PESTAÑA ESTADÍSTICAS ================= */}
         {activeTab === 'estadisticas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
@@ -1972,7 +2082,6 @@ export default function App() {
               </div>
             </section>
 
-            {/* Gasto por categoría (abierto por defecto, reinicio diario) */}
             <section
               style={{
                 background: theme.card,
@@ -2034,7 +2143,6 @@ export default function App() {
               </div>
             </section>
 
-            {/* Ingresos por categoría (abierto por defecto, reinicio diario) */}
             <section
               style={{
                 background: theme.card,
@@ -2335,6 +2443,22 @@ export default function App() {
               )}
             </div>
 
+            {wishFormAlert && (
+              <div
+                style={{
+                  backgroundColor: theme.dangerBg,
+                  border: `1px solid ${theme.danger}`,
+                  color: theme.danger,
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                }}
+              >
+                {wishFormAlert}
+              </div>
+            )}
+
             <form
               onSubmit={handleAddWish}
               style={{
@@ -2352,7 +2476,10 @@ export default function App() {
                   type="text"
                   placeholder="Ej: Gafas"
                   value={wishName}
-                  onChange={(e) => setWishName(e.target.value)}
+                  onChange={(e) => {
+                    setWishName(e.target.value);
+                    if (wishFormAlert) setWishFormAlert('');
+                  }}
                   style={baseInputStyle}
                 />
                 <input
@@ -2360,7 +2487,10 @@ export default function App() {
                   inputMode="numeric"
                   placeholder="Ej: 180.000"
                   value={wishPrice}
-                  onChange={(e) => setWishPrice(formatMoneyInput(e.target.value))}
+                  onChange={(e) => {
+                    setWishPrice(formatMoneyInput(e.target.value));
+                    if (wishFormAlert) setWishFormAlert('');
+                  }}
                   style={baseInputStyle}
                 />
               </div>
@@ -2557,7 +2687,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= PESTAÑA CONFIGURACIÓN ================= */}
+        {/* ================= PESTAÑA CONFIGURACIÓN (SECCIONES CERRADAS POR DEFECTO) ================= */}
         {activeTab === 'config' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 700, margin: '0 0 2px' }}>Configuración</h2>
@@ -2787,6 +2917,22 @@ export default function App() {
               <div className={`smooth-collapse ${openSections.cuentas ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {accFormAlert && (
+                      <div
+                        style={{
+                          backgroundColor: theme.dangerBg,
+                          border: `1px solid ${theme.danger}`,
+                          color: theme.danger,
+                          borderRadius: '10px',
+                          padding: '8px 10px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {accFormAlert}
+                      </div>
+                    )}
+
                     {data.accounts.length === 0 ? (
                       <div
                         style={{
@@ -2884,7 +3030,10 @@ export default function App() {
                           type="text"
                           placeholder="Ej: Nequi"
                           value={newAccName}
-                          onChange={(e) => setNewAccName(e.target.value)}
+                          onChange={(e) => {
+                            setNewAccName(e.target.value);
+                            if (accFormAlert) setAccFormAlert('');
+                          }}
                           style={baseInputStyle}
                         />
                         <input
@@ -2953,6 +3102,22 @@ export default function App() {
               <div className={`smooth-collapse ${openSections.categorias ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {catFormAlert && (
+                      <div
+                        style={{
+                          backgroundColor: theme.dangerBg,
+                          border: `1px solid ${theme.danger}`,
+                          color: theme.danger,
+                          borderRadius: '10px',
+                          padding: '8px 10px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {catFormAlert}
+                      </div>
+                    )}
+
                     {data.categories.length === 0 ? (
                       <div
                         style={{
@@ -3060,7 +3225,10 @@ export default function App() {
                           type="text"
                           placeholder="Ej: Gastos del carro"
                           value={newCatName}
-                          onChange={(e) => setNewCatName(e.target.value)}
+                          onChange={(e) => {
+                            setNewCatName(e.target.value);
+                            if (catFormAlert) setCatFormAlert('');
+                          }}
                           style={{ ...baseInputStyle, flex: 1 }}
                         />
                         <button
@@ -3086,7 +3254,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* 5. DEUDAS (modificables + reordenables + semáforo top 3 + borrar con "no volver a preguntar") */}
+            {/* 5. DEUDAS */}
             <section
               style={{
                 background: theme.card,
@@ -3119,6 +3287,22 @@ export default function App() {
               <div className={`smooth-collapse ${openSections.deudas ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {debtFormAlert && (
+                      <div
+                        style={{
+                          backgroundColor: theme.dangerBg,
+                          border: `1px solid ${theme.danger}`,
+                          color: theme.danger,
+                          borderRadius: '10px',
+                          padding: '8px 10px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {debtFormAlert}
+                      </div>
+                    )}
+
                     {data.debts.length === 0 ? (
                       <div
                         style={{
@@ -3288,7 +3472,10 @@ export default function App() {
                           type="text"
                           placeholder="Ej: Tarjeta"
                           value={newDebtName}
-                          onChange={(e) => setNewDebtName(e.target.value)}
+                          onChange={(e) => {
+                            setNewDebtName(e.target.value);
+                            if (debtFormAlert) setDebtFormAlert('');
+                          }}
                           style={baseInputStyle}
                         />
                         <input
@@ -3296,7 +3483,10 @@ export default function App() {
                           inputMode="numeric"
                           placeholder="Ej: 200.000"
                           value={newDebtAmount}
-                          onChange={(e) => setNewDebtAmount(formatMoneyInput(e.target.value))}
+                          onChange={(e) => {
+                            setNewDebtAmount(formatMoneyInput(e.target.value));
+                            if (debtFormAlert) setDebtFormAlert('');
+                          }}
                           style={baseInputStyle}
                         />
                       </div>
@@ -3326,7 +3516,7 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
               <button
                 type="button"
-                onClick={handleDownloadPDF}
+                onClick={() => setShowPdfPreviewModal(true)}
                 style={{
                   width: '100%',
                   padding: '13px',
@@ -3342,14 +3532,145 @@ export default function App() {
                 Descargar PDF
               </button>
               <div style={{ fontSize: '11px', color: theme.textMuted, paddingLeft: '4px', lineHeight: 1.35 }}>
-                Crea una vista imprimible o para guardar como PDF con tu saldo disponible, deudas, movimientos y deseos.
+                Abre el resumen para guardar como PDF y volver cuando quieras.
               </div>
             </div>
           </div>
         )}
       </main>
 
-      {/* ================= APARTADO / MODAL DEDICADO DE DEUDAS ================= */}
+      {/* ================= VISTA / MODAL PDF CON BOTÓN VOLVER ================= */}
+      {showPdfPreviewModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 75,
+            backgroundColor: theme.bg,
+            color: theme.textPrimary,
+            overflowY: 'auto',
+            paddingTop: 'calc(28px + env(safe-area-inset-top))',
+            paddingRight: '18px',
+            paddingBottom: '28px',
+            paddingLeft: '18px',
+          }}
+        >
+          <div style={{ maxWidth: '480px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setShowPdfPreviewModal(false)}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.borderStrong}`,
+                  backgroundColor: theme.cardSolid,
+                  color: theme.textPrimary,
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Volver
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTriggerSavePDF}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.accentBlue,
+                  color: '#FFFFFF',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Guardar PDF
+              </button>
+            </div>
+
+            <div
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '18px',
+                padding: '16px',
+              }}
+            >
+              <div style={{ fontSize: '18px', fontWeight: 800, marginBottom: '4px' }}>
+                Reporte ArtPay ({currency})
+              </div>
+              <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
+                {data.userName ? `Usuario: ${data.userName} • ` : ''}
+                {new Date().toLocaleDateString('es-CO')}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px' }}>
+                <div>
+                  Plata disponible: <strong>{renderMoney(totalAvailable)} {currency}</strong>
+                </div>
+                <div>
+                  Deudas: <strong style={{ color: theme.danger }}>{renderMoney(totalDebts)} {currency}</strong>
+                </div>
+                <div>
+                  Deseos estimados: <strong>{renderMoney(totalWishesValue)}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '18px',
+                padding: '16px',
+              }}
+            >
+              <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '10px' }}>
+                Últimos movimientos
+              </div>
+              {data.transactions.length === 0 ? (
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>Sin movimientos registrados.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {data.transactions.slice(0, 20).map((tx) => (
+                    <div
+                      key={tx.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '12px',
+                        paddingBottom: '6px',
+                        borderBottom: `1px solid ${theme.border}`,
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{tx.categoryName}</div>
+                        <div style={{ color: theme.textMuted }}>{formatDateTimeLabel(tx.date)}</div>
+                      </div>
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color: tx.type === 'ingreso' ? theme.success : theme.danger,
+                        }}
+                      >
+                        {tx.type === 'ingreso' ? '+' : '-'}
+                        {renderMoney(tx.amount)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= APARTADO DEDICADO DE DEUDAS + ABONAR AL TOCAR UNA DEUDA ================= */}
       {showDebtSectionModal && (
         <div
           style={{
@@ -3383,12 +3704,15 @@ export default function App() {
               <div>
                 <div style={{ fontSize: '16px', fontWeight: 700 }}>Deudas</div>
                 <div style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  Total: <strong style={{ color: theme.danger }}>{renderMoney(totalDebts)}</strong>
+                  Total: <strong style={{ color: theme.danger }}>{renderMoney(totalDebts)}</strong> • Toca una deuda para abonar
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowDebtSectionModal(false)}
+                onClick={() => {
+                  setSelectedDebtForPayment(null);
+                  setShowDebtSectionModal(false);
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -3419,18 +3743,21 @@ export default function App() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {data.debts.map((debt, idx) => {
                   const dStyle = getDebtRankStyle(idx);
+                  const isSelected = selectedDebtForPayment?.id === debt.id;
                   return (
                     <div
                       key={debt.id}
+                      onClick={() => openPayForDebt(debt)}
                       style={{
                         backgroundColor: theme.cardSubtle,
-                        border: `1px solid ${dStyle.border}`,
+                        border: isSelected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${dStyle.border}`,
                         borderRadius: '14px',
                         padding: '12px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '8px',
+                        cursor: 'pointer',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
@@ -3456,7 +3783,10 @@ export default function App() {
                         </span>
                       </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <span style={{ fontSize: '14px', fontWeight: 800, color: dStyle.amountColor }}>
                           {renderMoney(debt.amount)}
                         </span>
@@ -3503,9 +3833,119 @@ export default function App() {
               </div>
             )}
 
+            {/* Formulario de abono al tocar una deuda */}
+            {selectedDebtForPayment && (
+              <form
+                onSubmit={handleConfirmDebtPayment}
+                style={{
+                  backgroundColor: theme.cardSubtle,
+                  border: `1.5px solid ${theme.accentBlue}`,
+                  borderRadius: '14px',
+                  padding: '12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                <div style={{ fontSize: '13px', fontWeight: 700 }}>
+                  Abonar a "{selectedDebtForPayment.name}" ({renderMoney(selectedDebtForPayment.amount)})
+                </div>
+
+                {debtPayFeedback && (
+                  <div
+                    style={{
+                      backgroundColor: theme.dangerBg,
+                      border: `1px solid ${theme.danger}`,
+                      color: theme.danger,
+                      borderRadius: '8px',
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {debtPayFeedback}
+                  </div>
+                )}
+
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="¿Cuánto vas a abonar? (Ej: 50.000)"
+                  value={debtPayInput}
+                  onChange={(e) => {
+                    setDebtPayInput(formatMoneyInput(e.target.value));
+                    if (debtPayFeedback) setDebtPayFeedback('');
+                  }}
+                  style={baseInputStyle}
+                />
+
+                <div>
+                  <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
+                    ¿De dónde va a salir la plata?
+                  </label>
+                  <select
+                    value={debtPayAccountId}
+                    onChange={(e) => {
+                      setDebtPayAccountId(e.target.value);
+                      if (debtPayFeedback) setDebtPayFeedback('');
+                    }}
+                    style={baseInputStyle}
+                  >
+                    {data.accounts.length === 0 ? (
+                      <option value="">Sin cuentas disponibles</option>
+                    ) : (
+                      data.accounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({formatMoneyByCurrency(acc.balance, currency)})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDebtForPayment(null);
+                      setDebtPayFeedback('');
+                    }}
+                    style={{
+                      padding: '10px',
+                      borderRadius: '10px',
+                      border: `1px solid ${theme.border}`,
+                      backgroundColor: theme.inputBg,
+                      color: theme.textSecondary,
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      padding: '10px',
+                      borderRadius: '10px',
+                      border: 'none',
+                      backgroundColor: theme.accentBlue,
+                      color: '#FFFFFF',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Confirmar abono
+                  </button>
+                </div>
+              </form>
+            )}
+
             <button
               type="button"
               onClick={() => {
+                setSelectedDebtForPayment(null);
                 setShowDebtSectionModal(false);
                 setActiveTab('config');
                 setOpenSections((s) => ({ ...s, deudas: true }));
