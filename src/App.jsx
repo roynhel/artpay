@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.18';
+const APP_VERSION = 'v1.0.19';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -251,6 +251,21 @@ const normalizeStoredData = (parsed) => ({
       })
     : [],
 });
+
+const getNativeMapHref = (lat, lng) => {
+  if (typeof navigator !== 'undefined') {
+    const ua = navigator.userAgent || '';
+    const isApple = /iPhone|iPad|iPod|Macintosh/i.test(ua);
+    const isAndroid = /Android/i.test(ua);
+    if (isApple) {
+      return `maps://?ll=${lat},${lng}&q=${lat},${lng}`;
+    }
+    if (isAndroid) {
+      return `geo:${lat},${lng}?q=${lat},${lng}`;
+    }
+  }
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+};
 
 const buildMiniMapEmbedUrl = (lat, lng) => {
   const delta = 0.0045;
@@ -1357,114 +1372,168 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleTriggerSavePDF = () => {
-    const rowsHtml = data.transactions
-      .map(
-        (t) => `
-        <tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.categoryName}${
-            t.subcategoryName ? ` (${t.subcategoryName})` : ''
-          }</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.accountName}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${formatDateTimeLabel(t.date)}${
-            t.location?.label ? `<br/><small style="color:#475569;">${t.location.label}</small>` : ''
-          }</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;text-align:right;font-weight:700;">${
-            t.type === 'ingreso' ? '+' : t.type === 'gasto' ? '-' : '⇄ '
-          }${formatMoneyByCurrency(t.amount, currency)}</td>
-        </tr>`
-      )
-      .join('');
+  const handleTriggerSavePDF = async () => {
+    const sanitizeAscii = (str) =>
+      String(str || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[^ -~]/g, ' ')
+        .replace(/\\/g, '\\\\')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)');
 
-    const accountsHtml = data.accounts
-      .map(
-        (a) =>
-          `<li><strong>${a.name}</strong>: ${formatMoneyByCurrency(a.balance, currency)}</li>`
-      )
-      .join('');
-
-    const debtsHtml = data.debts
-      .map(
-        (d, idx) =>
-          `<li>#${idx + 1} <strong>${d.name}</strong>: ${formatMoneyByCurrency(d.amount, currency)}</li>`
-      )
-      .join('');
-
-    const wishesHtml = data.wishes
-      .map(
-        (w, idx) =>
-          `<li>#${idx + 1} <strong>${w.name}</strong>: ${formatMoneyByCurrency(w.price, currency)}</li>`
-      )
-      .join('');
-
-    const printWin = window.open('', '_blank', 'width=720,height=860');
-    if (printWin) {
-      printWin.document.write(`
-        <html>
-          <head>
-            <title>ArtPay - Reporte PDF</title>
-            <style>
-              body { font-family: -apple-system, Arial, sans-serif; padding: 24px; color: #0f172a; }
-              h1 { margin: 0 0 4px; font-size: 22px; }
-              .meta { color: #475569; font-size: 13px; margin-bottom: 16px; }
-              .box { border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
-              h3 { margin: 0 0 8px; font-size: 15px; }
-              ul { margin: 0; padding-left: 18px; }
-              li { margin-bottom: 4px; font-size: 13px; }
-              table { width: 100%; border-collapse: collapse; font-size: 12px; }
-              th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #94a3b8; }
-            </style>
-          </head>
-          <body>
-            <h1>ArtPay — Reporte Financiero (${currency})</h1>
-            <div class="meta">${data.userName ? `Usuario: ${data.userName} • ` : ''}${new Date().toLocaleDateString('es-CO')} • ${APP_VERSION}</div>
-            <div class="box">
-              <div><strong>Plata disponible:</strong> ${formatMoneyByCurrency(totalAvailable, currency)} ${currency}</div>
-              <div><strong>Deudas totales:</strong> ${formatMoneyByCurrency(totalDebts, currency)} ${currency}</div>
-              <div><strong>Ingresos hoy:</strong> +${formatMoneyByCurrency(todayIncome, currency)}</div>
-              <div><strong>Gastos hoy:</strong> -${formatMoneyByCurrency(todayExpense, currency)}</div>
-            </div>
-            <div class="box">
-              <h3>Cuentas</h3>
-              <ul>${accountsHtml || '<li>Sin cuentas</li>'}</ul>
-            </div>
-            <div class="box">
-              <h3>Deudas</h3>
-              <ul>${debtsHtml || '<li>Sin deudas</li>'}</ul>
-            </div>
-            <div class="box">
-              <h3>Lista de deseos</h3>
-              <ul>${wishesHtml || '<li>Sin deseos</li>'}</ul>
-            </div>
-            <div class="box">
-              <h3>Movimientos</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Categoría</th>
-                    <th>Cuenta</th>
-                    <th>Fecha y ubicación</th>
-                    <th style="text-align:right;">Valor</th>
-                  </tr>
-                </thead>
-                <tbody>${rowsHtml || '<tr><td colspan="4" style="padding:8px;">Sin movimientos</td></tr>'}</tbody>
-              </table>
-            </div>
-            <script>
-              window.onload = function() {
-                setTimeout(function() { window.print(); }, 200);
-              };
-            </script>
-          </body>
-        </html>
-      `);
-      printWin.document.close();
-      return;
+    const linesToDraw = [];
+    linesToDraw.push({ text: `ArtPay - Reporte Financiero (${currency})`, bold: true, size: 15 });
+    linesToDraw.push({
+      text: `${data.userName ? `Usuario: ${data.userName} | ` : ''}Fecha: ${new Date().toLocaleDateString('es-CO')} | ${APP_VERSION}`,
+      bold: false,
+      size: 9,
+    });
+    linesToDraw.push({ text: ' ', bold: false, size: 8 });
+    linesToDraw.push({
+      text: `Plata disponible: ${formatMoneyByCurrency(totalAvailable, currency)} ${currency}`,
+      bold: true,
+      size: 11,
+    });
+    linesToDraw.push({
+      text: `Deudas totales: ${formatMoneyByCurrency(totalDebts, currency)} ${currency}`,
+      bold: true,
+      size: 11,
+    });
+    linesToDraw.push({ text: ' ', bold: false, size: 8 });
+    linesToDraw.push({ text: `CUENTAS (${data.accounts.length})`, bold: true, size: 11 });
+    if (data.accounts.length === 0) {
+      linesToDraw.push({ text: '  - Sin cuentas registradas', bold: false, size: 10 });
+    } else {
+      data.accounts.forEach((acc) => {
+        linesToDraw.push({
+          text: `  - ${acc.name}: ${formatMoneyByCurrency(acc.balance, currency)}`,
+          bold: false,
+          size: 10,
+        });
+      });
     }
 
-    if (typeof window !== 'undefined' && typeof window.print === 'function') {
-      window.print();
+    linesToDraw.push({ text: ' ', bold: false, size: 8 });
+    linesToDraw.push({ text: `TODOS LOS MOVIMIENTOS (${data.transactions.length})`, bold: true, size: 11 });
+    if (data.transactions.length === 0) {
+      linesToDraw.push({ text: '  - Sin movimientos registrados', bold: false, size: 10 });
+    } else {
+      data.transactions.forEach((tx) => {
+        const sign = tx.type === 'ingreso' ? '+' : tx.type === 'gasto' ? '-' : '<-> ';
+        const subPart = tx.subcategoryName ? ` (${tx.subcategoryName})` : '';
+        const notePart = tx.note && tx.type !== 'transferencia' ? ` | Nota: ${tx.note}` : '';
+        linesToDraw.push({
+          text: `  * ${tx.categoryName}${subPart} [${tx.accountName}]: ${sign}${formatMoneyByCurrency(tx.amount, currency)}`,
+          bold: true,
+          size: 9.5,
+        });
+        linesToDraw.push({
+          text: `    ${formatDateTimeLabel(tx.date)}${notePart}`,
+          bold: false,
+          size: 8.5,
+        });
+        if (tx.location?.label) {
+          linesToDraw.push({
+            text: `    Ubicacion: ${tx.location.label} (${tx.location.lat}, ${tx.location.lng})`,
+            bold: false,
+            size: 8,
+          });
+        }
+      });
     }
+
+    const pages = [];
+    let currentOps = [];
+    let cursorY = 795;
+
+    linesToDraw.forEach((item) => {
+      const lineHeight = item.size + 5;
+      if (cursorY < 48) {
+        pages.push(currentOps.join('\n'));
+        currentOps = [];
+        cursorY = 795;
+      }
+      const fontTag = item.bold ? '/F2' : '/F1';
+      const safe = sanitizeAscii(item.text);
+      currentOps.push(`BT ${fontTag} ${item.size} Tf 42 ${cursorY} Td (${safe}) Tj ET`);
+      cursorY -= lineHeight;
+    });
+    if (currentOps.length > 0) {
+      pages.push(currentOps.join('\n'));
+    }
+
+    const totalPages = Math.max(1, pages.length);
+    const objects = [];
+    objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    const pageObjIds = [];
+    for (let p = 0; p < totalPages; p += 1) {
+      pageObjIds.push(5 + p * 2);
+    }
+    objects[2] = `<< /Type /Pages /Kids [${pageObjIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${totalPages} >>`;
+    objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+    objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>';
+
+    for (let p = 0; p < totalPages; p += 1) {
+      const pageId = 5 + p * 2;
+      const contentId = 6 + p * 2;
+      const streamData = pages[p] || '';
+      objects[pageId] =
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`;
+      objects[contentId] = `<< /Length ${streamData.length} >>
+stream
+${streamData}
+endstream`;
+    }
+
+    let pdf = '%PDF-1.4\n';
+    const offsets = [0];
+    for (let id = 1; id < objects.length; id += 1) {
+      offsets[id] = pdf.length;
+      pdf += `${id} 0 obj\n${objects[id]}\nendobj\n`;
+    }
+    const xrefPos = pdf.length;
+    pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+    for (let id = 1; id < objects.length; id += 1) {
+      pdf += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
+    }
+    pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+
+    const bytes = new Uint8Array(pdf.length);
+    for (let i = 0; i < pdf.length; i += 1) {
+      bytes[i] = pdf.charCodeAt(i) & 0xff;
+    }
+
+    const fileName = `ArtPay-Reporte-${getBackupStampFilePart(new Date())}.pdf`;
+    const pdfBlob = new Blob([bytes], { type: 'application/pdf' });
+
+    try {
+      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+      if (
+        typeof navigator !== 'undefined' &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({ files: [pdfFile] })
+      ) {
+        await navigator.share({
+          files: [pdfFile],
+          title: 'ArtPay Reporte PDF',
+        });
+        return;
+      }
+    } catch (shareErr) {
+      if (shareErr && shareErr.name === 'AbortError') return;
+    }
+
+    const blobUrl = URL.createObjectURL(pdfBlob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => {
+      window.open(blobUrl, '_blank');
+    }, 150);
   };
 
   // --- Deseos ---
@@ -4780,12 +4849,12 @@ export default function App() {
                     Coordenadas: {selectedTxDetail.location.lat}, {selectedTxDetail.location.lng}
                   </div>
 
-                  {/* Minimapa interactivo / tocable para abrir en Google Maps */}
+                  {/* Minimapa interactivo / tocable para abrir en la app de mapas predeterminada */}
                   <a
-                    href={selectedTxDetail.location.mapUrl}
+                    href={getNativeMapHref(selectedTxDetail.location.lat, selectedTxDetail.location.lng)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="Toca para abrir en Google Maps"
+                    title="Toca para abrir en Mapas"
                     style={{
                       position: 'relative',
                       display: 'block',
@@ -4825,7 +4894,7 @@ export default function App() {
                         border: '1px solid rgba(255,255,255,0.2)',
                       }}
                     >
-                      Abrir en Google Maps ↗
+                      Abrir en Mapas ↗
                     </span>
                   </a>
                 </>
@@ -5094,15 +5163,6 @@ export default function App() {
                 <div>
                   Deudas totales: <strong style={{ color: totalDebts > 0 ? theme.danger : theme.textPrimary }}>{formatMoneyByCurrency(totalDebts, currency)} {currency}</strong>
                 </div>
-                <div>
-                  Ingresos hoy: <strong style={{ color: theme.success }}>+{formatMoneyByCurrency(todayIncome, currency)}</strong>
-                </div>
-                <div>
-                  Gastos hoy: <strong style={{ color: theme.danger }}>-{formatMoneyByCurrency(todayExpense, currency)}</strong>
-                </div>
-                <div>
-                  Total lista de deseos: <strong>{formatMoneyByCurrency(totalWishesValue, currency)}</strong>
-                </div>
               </div>
             </div>
 
@@ -5133,102 +5193,6 @@ export default function App() {
                   >
                     <span>{acc.name}</span>
                     <strong>{formatMoneyByCurrency(acc.balance, currency)}</strong>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div
-              style={{
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '18px',
-                padding: '16px',
-              }}
-            >
-              <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>
-                Deudas activas ({data.debts.length})
-              </div>
-              {data.debts.length === 0 ? (
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>Sin deudas activas.</div>
-              ) : (
-                data.debts.map((debt, idx) => (
-                  <div
-                    key={debt.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      fontSize: '12px',
-                      padding: '5px 0',
-                      borderBottom: `1px solid ${theme.border}`,
-                    }}
-                  >
-                    <span>#{idx + 1} {debt.name}</span>
-                    <strong style={{ color: theme.danger }}>{formatMoneyByCurrency(debt.amount, currency)}</strong>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div
-              style={{
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '18px',
-                padding: '16px',
-              }}
-            >
-              <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>
-                Suscripciones ({computedSubscriptions.length})
-              </div>
-              {computedSubscriptions.length === 0 ? (
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>Sin suscripciones registradas.</div>
-              ) : (
-                computedSubscriptions.map((sub) => (
-                  <div
-                    key={sub.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      fontSize: '12px',
-                      padding: '5px 0',
-                      borderBottom: `1px solid ${theme.border}`,
-                    }}
-                  >
-                    <span>{sub.name} ({sub.dateLabel} • {sub.accountName})</span>
-                    <strong>{formatMoneyByCurrency(sub.price, currency)}</strong>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div
-              style={{
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '18px',
-                padding: '16px',
-              }}
-            >
-              <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>
-                Lista de deseos ({data.wishes.length})
-              </div>
-              {data.wishes.length === 0 ? (
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>Sin deseos registrados.</div>
-              ) : (
-                data.wishes.map((w, idx) => (
-                  <div
-                    key={w.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      fontSize: '12px',
-                      padding: '5px 0',
-                      borderBottom: `1px solid ${theme.border}`,
-                    }}
-                  >
-                    <span>#{idx + 1} {w.name}</span>
-                    <strong>{formatMoneyByCurrency(w.price, currency)}</strong>
                   </div>
                 ))
               )}
@@ -5507,10 +5471,13 @@ export default function App() {
                     <input
                       type="text"
                       inputMode="numeric"
-                      placeholder="¿Cuánto vas a abonar? (Ej: 50.000)"
+                      placeholder={`Máximo ${formatMoneyByCurrency(selectedDebtForPayment.amount, currency)}`}
                       value={debtPayInput}
                       onChange={(e) => {
-                        setDebtPayInput(formatMoneyInput(e.target.value));
+                        const maxDebt = Number(selectedDebtForPayment.amount) || 0;
+                        const typedNum = parseMoneyInput(e.target.value);
+                        const clampedNum = typedNum > maxDebt ? maxDebt : typedNum;
+                        setDebtPayInput(clampedNum > 0 ? clampedNum.toLocaleString('es-CO') : '');
                         if (debtPayFeedback) setDebtPayFeedback('');
                       }}
                       style={baseInputStyle}
