@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
+const APP_VERSION = 'v1.0.14';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v13',
@@ -320,10 +321,10 @@ export default function App() {
   const [txNote, setTxNote] = useState('');
   const [txError, setTxError] = useState('');
 
-  // Secciones en Configuración: todas cerradas por defecto
+  // Secciones en Configuración: solo Perfil y moneda y Apariencia abiertas por defecto
   const [openSections, setOpenSections] = useState({
-    perfil: false,
-    apariencia: false,
+    perfil: true,
+    apariencia: true,
     cuentas: false,
     categorias: false,
     deudas: false,
@@ -433,6 +434,19 @@ export default function App() {
   const toggleStat = useCallback((key) => {
     setOpenStats((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
+
+  const openOnlyDebtSectionInConfig = () => {
+    setSelectedDebtForPayment(null);
+    setShowDebtSectionModal(false);
+    setActiveTab('config');
+    setOpenSections({
+      perfil: false,
+      apariencia: false,
+      cuentas: false,
+      categorias: false,
+      deudas: true,
+    });
+  };
 
   const goToAddCategory = () => {
     setShowTxModal(false);
@@ -979,7 +993,9 @@ export default function App() {
   };
 
   const handleTriggerSavePDF = () => {
-    window.print();
+    if (typeof window !== 'undefined' && typeof window.print === 'function') {
+      window.print();
+    }
   };
 
   // --- Deseos ---
@@ -1477,6 +1493,7 @@ export default function App() {
             background: #FFFFFF !important;
             color: #0F172A !important;
             padding: 16px !important;
+            overflow: visible !important;
           }
           .no-print-btn {
             display: none !important;
@@ -1524,6 +1541,7 @@ export default function App() {
                   style={{ width: '34px', height: '34px', borderRadius: '10px', objectFit: 'cover' }}
                 />
                 <span style={{ fontSize: '17px', fontWeight: 800 }}>ArtPay</span>
+                <span style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>{APP_VERSION}</span>
               </div>
               <button
                 type="button"
@@ -1633,8 +1651,13 @@ export default function App() {
             </button>
 
             <div>
-              <div style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '-0.4px' }}>
-                ArtPay
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px' }}>
+                <span style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '-0.4px' }}>
+                  ArtPay
+                </span>
+                <span style={{ fontSize: '10px', fontWeight: 600, color: theme.textMuted }}>
+                  {APP_VERSION}
+                </span>
               </div>
               <button
                 type="button"
@@ -1917,7 +1940,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Deudas */}
+            {/* Tarjeta de Deudas (rojo si hay deuda, blanco si está en 0) */}
             <section
               className="debt-row-anim"
               onClick={() => setShowDebtSectionModal(true)}
@@ -1945,11 +1968,21 @@ export default function App() {
                   DEUDAS
                 </div>
                 <div>
-                  {renderBigCurrencyAmount(totalDebts, 24, {
-                    fontSize: '24px',
-                    fontWeight: 800,
-                    color: theme.danger,
-                  })}
+                  {renderBigCurrencyAmount(
+                    totalDebts,
+                    24,
+                    totalDebts > 0
+                      ? {
+                          fontSize: '24px',
+                          fontWeight: 800,
+                          color: theme.danger,
+                        }
+                      : {
+                          fontSize: '24px',
+                          fontWeight: 800,
+                          color: theme.textPrimary,
+                        }
+                  )}
                 </div>
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
                   {data.debts.length === 0
@@ -2804,7 +2837,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= PESTAÑA CONFIGURACIÓN (SECCIONES CERRADAS POR DEFECTO) ================= */}
+        {/* ================= PESTAÑA CONFIGURACIÓN ================= */}
         {activeTab === 'config' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 700, margin: '0 0 2px' }}>Configuración</h2>
@@ -3726,7 +3759,7 @@ export default function App() {
               </div>
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
                 {data.userName ? `Usuario: ${data.userName} • ` : ''}
-                {new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
+                {new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })} • {APP_VERSION}
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px' }}>
@@ -3734,7 +3767,7 @@ export default function App() {
                   Plata disponible: <strong>{formatMoneyByCurrency(totalAvailable, currency)} {currency}</strong>
                 </div>
                 <div>
-                  Deudas totales: <strong style={{ color: theme.danger }}>{formatMoneyByCurrency(totalDebts, currency)} {currency}</strong>
+                  Deudas totales: <strong style={{ color: totalDebts > 0 ? theme.danger : theme.textPrimary }}>{formatMoneyByCurrency(totalDebts, currency)} {currency}</strong>
                 </div>
                 <div>
                   Ingresos hoy: <strong style={{ color: theme.success }}>+{formatMoneyByCurrency(todayIncome, currency)}</strong>
@@ -3974,7 +4007,11 @@ export default function App() {
               <div>
                 <div style={{ fontSize: '16px', fontWeight: 700 }}>Deudas</div>
                 <div style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  Total: <strong style={{ color: theme.danger }}>{renderMoney(totalDebts)}</strong> • Toca una deuda para abonar
+                  Total:{' '}
+                  <strong style={{ color: totalDebts > 0 ? theme.danger : theme.textPrimary }}>
+                    {renderMoney(totalDebts)}
+                  </strong>{' '}
+                  • Toca una deuda para abonar
                 </div>
               </div>
               <button
@@ -4220,12 +4257,7 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => {
-                setSelectedDebtForPayment(null);
-                setShowDebtSectionModal(false);
-                setActiveTab('config');
-                setOpenSections((s) => ({ ...s, deudas: true }));
-              }}
+              onClick={openOnlyDebtSectionInConfig}
               style={{
                 width: '100%',
                 padding: '11px',
