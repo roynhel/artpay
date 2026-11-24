@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.14';
+const APP_VERSION = 'v1.0.15';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
+  'artpay_data_v14',
   'artpay_data_v13',
   'artpay_data_v12',
   'artpay_data_v11',
@@ -22,6 +23,7 @@ const DEFAULT_DATA = {
   transactions: [],
   wishes: [],
   subscriptions: [],
+  lastBackupAt: null,
   skipCategoryDeleteConfirm: false,
   skipAccountDeleteConfirm: false,
   skipDebtDeleteConfirm: false,
@@ -131,6 +133,16 @@ const getLocalDayKey = (dateObj = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
+const getBackupStampFilePart = (dateObj = new Date()) => {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  const hh = String(dateObj.getHours()).padStart(2, '0');
+  const mm = String(dateObj.getMinutes()).padStart(2, '0');
+  const ss = String(dateObj.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d}_${hh}-${mm}-${ss}`;
+};
+
 const formatDayHeading = (isoOrKey) => {
   if (!isoOrKey) return 'Fecha desconocida';
   const datePart = isoOrKey.length === 10 ? isoOrKey : isoOrKey.slice(0, 10);
@@ -189,6 +201,7 @@ const normalizeStoredData = (parsed) => ({
   ...DEFAULT_DATA,
   ...parsed,
   currency: parsed.currency || 'COP',
+  lastBackupAt: parsed.lastBackupAt || null,
   accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
   debts: Array.isArray(parsed.debts) ? parsed.debts : [],
   transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
@@ -261,6 +274,17 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [accountsExpanded, setAccountsExpanded] = useState(true);
 
+  // Transferencias entre cuentas
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferFromId, setTransferFromId] = useState('');
+  const [transferToId, setTransferToId] = useState('');
+  const [transferAmount, setTransferAmount] = useState('');
+  const [transferError, setTransferError] = useState('');
+
+  // Filtros en Todos los movimientos
+  const [txFilterType, setTxFilterType] = useState('todos'); // 'todos' | 'ingreso' | 'gasto'
+  const [txFilterAccountId, setTxFilterAccountId] = useState('todas');
+
   // Apartado/modal dedicado de Deudas + selección de deuda para abonar al tocarla
   const [showDebtSectionModal, setShowDebtSectionModal] = useState(false);
   const [selectedDebtForPayment, setSelectedDebtForPayment] = useState(null);
@@ -328,6 +352,8 @@ export default function App() {
     cuentas: false,
     categorias: false,
     deudas: false,
+    editarSuscripciones: false,
+    editarDeseos: false,
   });
 
   // Secciones en Estadísticas: abiertas por defecto
@@ -385,13 +411,16 @@ export default function App() {
   }, [data]);
 
   useEffect(() => {
-    if (data.accounts.length > 0 && !subAccountId) {
-      setSubAccountId(data.accounts[0].id);
+    if (data.accounts.length > 0) {
+      if (!subAccountId) setSubAccountId(data.accounts[0].id);
+      if (!debtPayAccountId) setDebtPayAccountId(data.accounts[0].id);
+      if (!transferFromId) setTransferFromId(data.accounts[0].id);
+      if (!transferToId) {
+        const second = data.accounts[1] || data.accounts[0];
+        setTransferToId(second.id);
+      }
     }
-    if (data.accounts.length > 0 && !debtPayAccountId) {
-      setDebtPayAccountId(data.accounts[0].id);
-    }
-  }, [data.accounts, subAccountId, debtPayAccountId]);
+  }, [data.accounts, subAccountId, debtPayAccountId, transferFromId, transferToId]);
 
   const isDark = data.theme === 'system' ? systemPrefersDark : data.theme === 'dark';
   const currency = data.currency || 'COP';
@@ -412,6 +441,14 @@ export default function App() {
     }
   }, [isDark]);
 
+  const needsWeeklyBackupReminder = useMemo(() => {
+    if (!data.lastBackupAt) return true;
+    const lastTime = new Date(data.lastBackupAt).getTime();
+    if (Number.isNaN(lastTime)) return true;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    return Date.now() - lastTime >= sevenDaysMs;
+  }, [data.lastBackupAt]);
+
   const { totalAvailable, totalDebts, todayIncome, todayExpense } = useMemo(() => {
     const avail = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
     const debts = data.debts.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
@@ -421,7 +458,7 @@ export default function App() {
       const t = data.transactions[i];
       if (t.date && getLocalDayKey(new Date(t.date)) === currentDayKey) {
         if (t.type === 'ingreso') inc += Number(t.amount) || 0;
-        else exp += Number(t.amount) || 0;
+        else if (t.type === 'gasto') exp += Number(t.amount) || 0;
       }
     }
     return { totalAvailable: avail, totalDebts: debts, todayIncome: inc, todayExpense: exp };
@@ -435,7 +472,7 @@ export default function App() {
     setOpenStats((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  const openOnlyDebtSectionInConfig = () => {
+  const openOnlySectionInConfig = (targetKey) => {
     setSelectedDebtForPayment(null);
     setShowDebtSectionModal(false);
     setActiveTab('config');
@@ -444,22 +481,97 @@ export default function App() {
       apariencia: false,
       cuentas: false,
       categorias: false,
-      deudas: true,
+      deudas: false,
+      editarSuscripciones: false,
+      editarDeseos: false,
+      [targetKey]: true,
     });
   };
 
   const goToAddCategory = () => {
     setShowTxModal(false);
     setDrawerOpen(false);
-    setActiveTab('config');
-    setOpenSections((s) => ({ ...s, categorias: true }));
+    openOnlySectionInConfig('categorias');
   };
 
   const goToAddAccount = () => {
     setNoAccountAlert(false);
     setDrawerOpen(false);
-    setActiveTab('config');
-    setOpenSections((s) => ({ ...s, cuentas: true }));
+    openOnlySectionInConfig('cuentas');
+  };
+
+  // --- Transferencias entre cuentas ---
+  const openTransferDialog = () => {
+    if (data.accounts.length < 2) {
+      setTransferError('Necesitas al menos 2 cuentas creadas para transferir entre ellas.');
+      setTransferAmount('');
+      setShowTransferModal(true);
+      return;
+    }
+    const firstId = data.accounts[0].id;
+    const secondId = data.accounts[1].id;
+    setTransferFromId(firstId);
+    setTransferToId(secondId);
+    setTransferAmount('');
+    setTransferError('');
+    setShowTransferModal(true);
+  };
+
+  const handleExecuteTransfer = (e) => {
+    e.preventDefault();
+    setTransferError('');
+    if (data.accounts.length < 2) {
+      setTransferError('Agrega otra cuenta en Configuración para realizar transferencias.');
+      return;
+    }
+    if (!transferFromId || !transferToId || transferFromId === transferToId) {
+      setTransferError('Elige una cuenta de origen y una cuenta de destino diferentes.');
+      return;
+    }
+    const amt = parseMoneyInput(transferAmount);
+    if (!amt || amt <= 0) {
+      setTransferError('Escribe un valor mayor a 0 para transferir.');
+      return;
+    }
+    const fromAcc = data.accounts.find((a) => a.id === transferFromId);
+    const toAcc = data.accounts.find((a) => a.id === transferToId);
+    if (!fromAcc || !toAcc) return;
+
+    if (amt > (Number(fromAcc.balance) || 0)) {
+      setTransferError(
+        `No hay saldo suficiente en ${fromAcc.name} (${formatMoneyByCurrency(fromAcc.balance, currency)}).`
+      );
+      return;
+    }
+
+    const updatedAccounts = data.accounts.map((a) => {
+      if (a.id === fromAcc.id) {
+        return { ...a, balance: Math.max(0, (Number(a.balance) || 0) - amt) };
+      }
+      if (a.id === toAcc.id) {
+        return { ...a, balance: (Number(a.balance) || 0) + amt };
+      }
+      return a;
+    });
+
+    const transferTx = {
+      id: Date.now().toString(),
+      type: 'transferencia',
+      amount: amt,
+      accountId: fromAcc.id,
+      accountName: `${fromAcc.name} → ${toAcc.name}`,
+      categoryName: 'Transferencia entre cuentas',
+      categoryIcon: 'none',
+      note: `De ${fromAcc.name} a ${toAcc.name}`,
+      date: new Date().toISOString(),
+    };
+
+    setData((prev) => ({
+      ...prev,
+      accounts: updatedAccounts,
+      transactions: [transferTx, ...prev.transactions],
+    }));
+    setShowTransferModal(false);
   };
 
   // --- Abonar tocando una deuda ---
@@ -742,6 +854,44 @@ export default function App() {
     setSubBillingDay('12');
   };
 
+  const handleUpdateSubscription = (id, patch) => {
+    setData((prev) => ({
+      ...prev,
+      subscriptions: prev.subscriptions.map((s) => {
+        if (s.id !== id) return s;
+        const next = { ...s, ...patch };
+        if (patch.accountId) {
+          const accObj = prev.accounts.find((a) => a.id === patch.accountId);
+          if (accObj) next.accountName = accObj.name;
+        }
+        return next;
+      }),
+    }));
+  };
+
+  const handleMoveSubscriptionToDebt = (sub) => {
+    if (!sub) return;
+    const price = Number(sub.price) || 0;
+    const newDebt = {
+      id: Date.now().toString(),
+      name: `Suscripción: ${sub.name}`,
+      amount: price,
+    };
+    const updatedSubs = data.subscriptions.map((s) =>
+      s.id === sub.id ? { ...s, lastChargedMonth: currentMonthKey } : s
+    );
+
+    setData((prev) => ({
+      ...prev,
+      debts: [newDebt, ...prev.debts],
+      subscriptions: updatedSubs,
+    }));
+    setSubToChargeConfirm(null);
+    setSubError('');
+    setCelebrationBanner(`"${sub.name}" pasó a Deudas por ${formatMoneyByCurrency(price, currency)}.`);
+    setTimeout(() => setCelebrationBanner(''), 4500);
+  };
+
   const executeChargeSubscription = (sub) => {
     if (!sub) return;
     setSubError('');
@@ -754,7 +904,7 @@ export default function App() {
     }
     if (price > (Number(accObj.balance) || 0)) {
       setSubError(
-        `No hay saldo suficiente en ${accObj.name} (${formatMoneyByCurrency(accObj.balance, currency)}) para cobrar "${sub.name}".`
+        `No alcanza la plata en ${accObj.name} (${formatMoneyByCurrency(accObj.balance, currency)}) para cobrar "${sub.name}". Puedes enviarla a Deudas.`
       );
       setSubToChargeConfirm(null);
       return;
@@ -813,6 +963,10 @@ export default function App() {
         const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
         const daysLeft = Math.max(0, Math.round((targetMidnight - todayMidnight) / msPerDay));
 
+        const linkedAcc = data.accounts.find((a) => a.id === sub.accountId);
+        const accBal = linkedAcc ? Number(linkedAcc.balance) || 0 : 0;
+        const insufficientSoon = !chargedThisMonth && daysLeft <= 7 && (Number(sub.price) || 0) > accBal;
+
         let badgeText = daysLeft === 0 ? 'Hoy' : daysLeft === 1 ? 'Falta 1 día' : `Faltan ${daysLeft} días`;
         let badgeColor = '#60A5FA';
         let badgeBg = 'rgba(37, 99, 235, 0.18)';
@@ -844,6 +998,8 @@ export default function App() {
           badgeText,
           badgeColor,
           badgeBg,
+          insufficientSoon,
+          accountBal: accBal,
         };
       })
       .sort((a, b) => {
@@ -852,7 +1008,12 @@ export default function App() {
         }
         return a.daysLeft - b.daysLeft;
       });
-  }, [data.subscriptions, currentMonthKey]);
+  }, [data.subscriptions, data.accounts, currentMonthKey]);
+
+  const upcomingLowBalanceSubs = useMemo(
+    () => computedSubscriptions.filter((s) => s.insufficientSoon),
+    [computedSubscriptions]
+  );
 
   // --- Movimientos ---
   const openTransactionModal = () => {
@@ -951,27 +1112,39 @@ export default function App() {
     return groups;
   }, []);
 
+  const filteredAllTransactions = useMemo(() => {
+    return data.transactions.filter((tx) => {
+      if (txFilterType !== 'todos' && tx.type !== txFilterType) return false;
+      if (txFilterAccountId !== 'todas' && tx.accountId !== txFilterAccountId) return false;
+      return true;
+    });
+  }, [data.transactions, txFilterType, txFilterAccountId]);
+
   const recentGroupedTransactions = useMemo(
     () => groupTransactionsByDay(data.transactions.slice(0, 6)),
     [data.transactions, groupTransactionsByDay]
   );
 
-  const allGroupedTransactions = useMemo(
-    () => groupTransactionsByDay(data.transactions),
-    [data.transactions, groupTransactionsByDay]
+  const filteredGroupedTransactions = useMemo(
+    () => groupTransactionsByDay(filteredAllTransactions),
+    [filteredAllTransactions, groupTransactionsByDay]
   );
 
   // --- Exportar / Importar / Guardar PDF ---
   const handleExportData = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const nowIso = new Date().toISOString();
+    const stamp = getBackupStampFilePart(new Date());
+    const payload = { ...data, lastBackupAt: nowIso };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `artpay-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `artpay-respaldo-${stamp}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    setConfigNotice('Información exportada.');
-    setTimeout(() => setConfigNotice(''), 2500);
+    setData((prev) => ({ ...prev, lastBackupAt: nowIso }));
+    setConfigNotice(`Respaldo guardado (${stamp.replace('_', ' ')}).`);
+    setTimeout(() => setConfigNotice(''), 3000);
   };
 
   const handleImportFile = (e) => {
@@ -1019,6 +1192,13 @@ export default function App() {
     setData((prev) => ({ ...prev, wishes: [...prev.wishes, created] }));
     setWishName('');
     setWishPrice('');
+  };
+
+  const handleUpdateWish = (id, patch) => {
+    setData((prev) => ({
+      ...prev,
+      wishes: prev.wishes.map((w) => (w.id === id ? { ...w, ...patch } : w)),
+    }));
   };
 
   const confirmDeleteWish = () => {
@@ -1106,6 +1286,8 @@ export default function App() {
             dangerBg: 'rgba(239, 68, 68, 0.14)',
             success: '#34D399',
             successBg: 'rgba(16, 185, 129, 0.14)',
+            warning: '#FBBF24',
+            warningBg: 'rgba(245, 158, 11, 0.14)',
           }
         : {
             bg: '#F4F6F9',
@@ -1138,6 +1320,8 @@ export default function App() {
             dangerBg: 'rgba(220, 38, 38, 0.1)',
             success: '#059669',
             successBg: 'rgba(5, 150, 105, 0.1)',
+            warning: '#B45309',
+            warningBg: 'rgba(217, 119, 6, 0.12)',
           },
     [isDark]
   );
@@ -1255,25 +1439,25 @@ export default function App() {
   const getWishRankStyle = (idx) => {
     if (idx === 0) {
       return {
-        badgeBg: '#F59E0B',
-        badgeColor: '#090B0E',
-        cardBorder: 'rgba(245, 158, 11, 0.45)',
-        amountColor: '#FBBF24',
+        badgeBg: isDark ? '#F59E0B' : '#D97706',
+        badgeColor: '#FFFFFF',
+        cardBorder: isDark ? 'rgba(245, 158, 11, 0.45)' : 'rgba(217, 119, 6, 0.42)',
+        amountColor: isDark ? '#FBBF24' : '#B45309',
       };
     }
     if (idx === 1) {
       return {
-        badgeBg: '#CBD5E1',
-        badgeColor: '#090B0E',
-        cardBorder: 'rgba(203, 213, 225, 0.35)',
-        amountColor: '#E2E8F0',
+        badgeBg: isDark ? '#CBD5E1' : '#64748B',
+        badgeColor: '#FFFFFF',
+        cardBorder: isDark ? 'rgba(203, 213, 225, 0.35)' : 'rgba(100, 116, 139, 0.35)',
+        amountColor: isDark ? '#E2E8F0' : '#334155',
       };
     }
     if (idx === 2) {
       return {
-        badgeBg: '#60A5FA',
-        badgeColor: '#090B0E',
-        cardBorder: 'rgba(96, 165, 250, 0.38)',
+        badgeBg: theme.accentBlue,
+        badgeColor: '#FFFFFF',
+        cardBorder: isDark ? 'rgba(96, 165, 250, 0.38)' : 'rgba(37, 99, 235, 0.35)',
         amountColor: theme.accentBlueText,
       };
     }
@@ -1334,69 +1518,81 @@ export default function App() {
             {group.label}
           </div>
 
-          {group.items.map((tx) => (
-            <div
-              key={tx.id}
-              style={{
-                backgroundColor: theme.cardSolid,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '14px',
-                padding: '12px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '10px',
-                transition: `transform 0.25s ${iosEase}, background-color 0.25s ${iosEase}`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                {tx.categoryIcon && tx.categoryIcon !== 'none' ? (
-                  <CategoryGlyph iconId={tx.categoryIcon} size={18} color={theme.textSecondary} />
-                ) : null}
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
-                    {tx.categoryName}
-                  </div>
-                  <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
-                    {tx.accountName}
-                    {tx.note ? ` • ${tx.note}` : ''}
-                  </div>
-                  <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
-                    {formatDateTimeLabel(tx.date)}
+          {group.items.map((tx) => {
+            const isTransfer = tx.type === 'transferencia';
+            const sign = tx.type === 'ingreso' ? '+' : tx.type === 'gasto' ? '-' : '⇄ ';
+            const amountColor = isTransfer
+              ? theme.accentBlueText
+              : tx.type === 'ingreso'
+              ? theme.success
+              : theme.danger;
+
+            return (
+              <div
+                key={tx.id}
+                style={{
+                  backgroundColor: theme.cardSolid,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '14px',
+                  padding: '12px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                  transition: `transform 0.25s ${iosEase}, background-color 0.25s ${iosEase}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                  {tx.categoryIcon && tx.categoryIcon !== 'none' ? (
+                    <CategoryGlyph iconId={tx.categoryIcon} size={18} color={theme.textSecondary} />
+                  ) : null}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
+                      {tx.categoryName}
+                    </div>
+                    <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
+                      {tx.accountName}
+                      {tx.note && !isTransfer ? ` • ${tx.note}` : ''}
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
+                      {formatDateTimeLabel(tx.date)}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    color: tx.type === 'ingreso' ? theme.success : theme.danger,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {tx.type === 'ingreso' ? '+' : '-'}
-                  {renderMoney(tx.amount)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setTxToDelete(tx)}
-                  title="Eliminar movimiento"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: theme.textMuted,
-                    cursor: 'pointer',
-                    fontSize: '15px',
-                    padding: '4px',
-                  }}
-                >
-                  ✕
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span
+                    style={{
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      color: amountColor,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {sign}
+                    {renderMoney(tx.amount)}
+                  </span>
+                  {!isTransfer && (
+                    <button
+                      type="button"
+                      onClick={() => setTxToDelete(tx)}
+                      title="Eliminar movimiento"
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: theme.textMuted,
+                        cursor: 'pointer',
+                        fontSize: '15px',
+                        padding: '4px',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ))}
     </div>
@@ -1534,7 +1730,7 @@ export default function App() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <img
                   src="/logo.png"
                   alt="ArtPay"
@@ -1662,8 +1858,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
-                  setActiveTab('config');
-                  setOpenSections((s) => ({ ...s, perfil: true }));
+                  openOnlySectionInConfig('perfil');
                 }}
                 style={{
                   background: 'none',
@@ -1940,7 +2135,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Deudas (rojo si hay deuda, blanco si está en 0) */}
+            {/* Tarjeta de Deudas */}
             <section
               className="debt-row-anim"
               onClick={() => setShowDebtSectionModal(true)}
@@ -2012,29 +2207,49 @@ export default function App() {
               </div>
             </section>
 
-            {/* Botón Principal Azul: Registrar movimiento */}
-            <button
-              type="button"
-              onClick={openTransactionModal}
-              style={{
-                width: '100%',
-                padding: '15px',
-                borderRadius: '16px',
-                border: 'none',
-                backgroundColor: theme.accentBlue,
-                color: '#FFFFFF',
-                fontSize: '15px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                boxShadow: '0 8px 20px rgba(37, 99, 235, 0.35)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-              }}
-            >
-              <span style={{ fontSize: '19px', lineHeight: 1 }}>+</span> Registrar movimiento
-            </button>
+            {/* Botones de acción: Registrar movimiento + Transferir entre cuentas */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={openTransactionModal}
+                style={{
+                  width: '100%',
+                  padding: '14px 12px',
+                  borderRadius: '16px',
+                  border: 'none',
+                  backgroundColor: theme.accentBlue,
+                  color: '#FFFFFF',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 8px 20px rgba(37, 99, 235, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span style={{ fontSize: '18px', lineHeight: 1 }}>+</span> Registrar movimiento
+              </button>
+
+              <button
+                type="button"
+                onClick={openTransferDialog}
+                style={{
+                  width: '100%',
+                  padding: '14px 10px',
+                  borderRadius: '16px',
+                  border: `1.5px solid ${theme.accentBlue}`,
+                  backgroundColor: theme.accentBlueSoft,
+                  color: theme.accentBlueText,
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                ⇄ Transferir
+              </button>
+            </div>
 
             {/* Movimientos recientes en Inicio (máximo 6 + botón Ver más) */}
             <section style={{ marginTop: '4px' }}>
@@ -2099,14 +2314,14 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= PESTAÑA DEDICADA DE TODOS LOS MOVIMIENTOS ================= */}
+        {/* ================= PESTAÑA DEDICADA DE TODOS LOS MOVIMIENTOS CON FILTROS ================= */}
         {activeTab === 'movimientos' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
               <div>
                 <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Todos los movimientos</h2>
                 <p style={{ fontSize: '12px', color: theme.textSecondary, margin: '3px 0 0' }}>
-                  {data.transactions.length} {data.transactions.length === 1 ? 'movimiento registrado' : 'movimientos registrados'}
+                  {filteredAllTransactions.length} {filteredAllTransactions.length === 1 ? 'resultado' : 'resultados'}
                 </p>
               </div>
               <button
@@ -2127,7 +2342,62 @@ export default function App() {
               </button>
             </div>
 
-            {allGroupedTransactions.length === 0 ? (
+            {/* Filtros rápidos */}
+            <div
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '16px',
+                padding: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                {[
+                  { id: 'todos', label: 'Todos' },
+                  { id: 'ingreso', label: 'Ingresos' },
+                  { id: 'gasto', label: 'Gastos' },
+                ].map((flt) => {
+                  const active = txFilterType === flt.id;
+                  return (
+                    <button
+                      key={flt.id}
+                      type="button"
+                      onClick={() => setTxFilterType(flt.id)}
+                      style={{
+                        padding: '8px 6px',
+                        borderRadius: '10px',
+                        border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                        backgroundColor: active ? theme.accentBlueSoft : theme.cardSubtle,
+                        color: active ? theme.accentBlueText : theme.textSecondary,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {flt.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <select
+                value={txFilterAccountId}
+                onChange={(e) => setTxFilterAccountId(e.target.value)}
+                style={baseInputStyle}
+              >
+                <option value="todas">Todas las cuentas</option>
+                {data.accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {filteredGroupedTransactions.length === 0 ? (
               <div
                 style={{
                   backgroundColor: theme.cardSolid,
@@ -2139,10 +2409,10 @@ export default function App() {
                   fontSize: '13px',
                 }}
               >
-                No hay movimientos registrados.
+                No hay movimientos que coincidan con este filtro.
               </div>
             ) : (
-              renderTransactionListGroups(allGroupedTransactions)
+              renderTransactionListGroups(filteredGroupedTransactions)
             )}
           </div>
         )}
@@ -2359,12 +2629,50 @@ export default function App() {
         {/* ================= PESTAÑA SUSCRIPCIONES ================= */}
         {activeTab === 'suscripciones' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div>
-              <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Suscripciones</h2>
-              <p style={{ fontSize: '12px', color: theme.textSecondary, margin: '3px 0 0' }}>
-                Próxima a cobrar primero; ya cobradas al final
-              </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <div>
+                <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Suscripciones</h2>
+                <p style={{ fontSize: '12px', color: theme.textSecondary, margin: '3px 0 0' }}>
+                  Próxima a cobrar primero; ya cobradas al final
+                </p>
+              </div>
+              {data.subscriptions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => openOnlySectionInConfig('editarSuscripciones')}
+                  style={{
+                    padding: '7px 11px',
+                    borderRadius: '10px',
+                    border: `1px solid ${theme.borderStrong}`,
+                    backgroundColor: theme.cardSolid,
+                    color: theme.accentBlueText,
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                >
+                  Editar en Config
+                </button>
+              )}
             </div>
+
+            {upcomingLowBalanceSubs.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: theme.warningBg,
+                  border: `1px solid ${theme.warning}`,
+                  color: theme.warning,
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  lineHeight: 1.4,
+                }}
+              >
+                Atención: {upcomingLowBalanceSubs.map((s) => s.name).join(', ')} está a pocos días de cobrarse y no alcanza el saldo de su cuenta.
+              </div>
+            )}
 
             {subError && (
               <div
@@ -2497,7 +2805,13 @@ export default function App() {
                     key={sub.id}
                     style={{
                       background: theme.card,
-                      border: `1px solid ${sub.chargedThisMonth ? theme.border : theme.borderStrong}`,
+                      border: `1px solid ${
+                        sub.insufficientSoon
+                          ? theme.warning
+                          : sub.chargedThisMonth
+                          ? theme.border
+                          : theme.borderStrong
+                      }`,
                       borderRadius: '15px',
                       padding: '12px 14px',
                       display: 'flex',
@@ -2526,6 +2840,11 @@ export default function App() {
                       <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '3px' }}>
                         Se cobra el <strong>{sub.dateLabel}</strong> • Sale de: <strong>{sub.accountName}</strong>
                       </div>
+                      {sub.insufficientSoon && (
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: theme.warning, marginTop: '2px' }}>
+                          Falta saldo en {sub.accountName} para este cobro próximo
+                        </div>
+                      )}
                       <div style={{ fontSize: '13px', fontWeight: 700, color: theme.danger, marginTop: '2px' }}>
                         {renderMoney(sub.price)}
                       </div>
@@ -2576,21 +2895,41 @@ export default function App() {
         {/* ================= PESTAÑA DESEOS ================= */}
         {activeTab === 'deseos' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
               <div>
                 <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Lista de Deseos</h2>
                 <p style={{ fontSize: '12px', color: theme.textSecondary, margin: '3px 0 0' }}>
                   Mantén presionado el agarre izquierdo para ordenar
                 </p>
               </div>
-              {data.wishes.length > 0 && (
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: theme.textMuted }}>Total estimado</div>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.accentBlueText }}>
-                    {renderMoney(totalWishesValue)}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {data.wishes.length > 0 && (
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '11px', color: theme.textMuted }}>Total estimado</div>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.accentBlueText }}>
+                      {renderMoney(totalWishesValue)}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+                {data.wishes.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => openOnlySectionInConfig('editarDeseos')}
+                    style={{
+                      padding: '7px 11px',
+                      borderRadius: '10px',
+                      border: `1px solid ${theme.borderStrong}`,
+                      backgroundColor: theme.cardSolid,
+                      color: theme.accentBlueText,
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Editar en Config
+                  </button>
+                )}
+              </div>
             </div>
 
             {wishFormAlert && (
@@ -2842,6 +3181,22 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <h2 style={{ fontSize: '19px', fontWeight: 700, margin: '0 0 2px' }}>Configuración</h2>
 
+            {needsWeeklyBackupReminder && (
+              <div
+                style={{
+                  backgroundColor: theme.warningBg,
+                  border: `1px solid ${theme.warning}`,
+                  color: theme.warning,
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                }}
+              >
+                Recordatorio semanal: hace más de 7 días que no guardas un respaldo de tu información.
+              </div>
+            )}
+
             {configNotice && (
               <div
                 style={{
@@ -2961,6 +3316,11 @@ export default function App() {
                         onChange={handleImportFile}
                         style={{ display: 'none' }}
                       />
+                    </div>
+
+                    <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                      Último respaldo:{' '}
+                      {data.lastBackupAt ? formatDateTimeLabel(data.lastBackupAt) : 'Aún no has exportado'}
                     </div>
                   </div>
                 </div>
@@ -3663,6 +4023,179 @@ export default function App() {
               </div>
             </section>
 
+            {/* 6. EDITAR SUSCRIPCIONES */}
+            <section
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '18px',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => toggleSection('editarSuscripciones')}
+                style={{
+                  width: '100%',
+                  padding: '15px 16px',
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textPrimary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: '14px', fontWeight: 700 }}>
+                  Editar suscripciones ({data.subscriptions.length})
+                </span>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  {openSections.editarSuscripciones ? '▲' : '▼'}
+                </span>
+              </button>
+
+              <div className={`smooth-collapse ${openSections.editarSuscripciones ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {data.subscriptions.length === 0 ? (
+                      <div style={{ fontSize: '12px', color: theme.textMuted }}>No hay suscripciones para editar.</div>
+                    ) : (
+                      data.subscriptions.map((sub) => (
+                        <div
+                          key={sub.id}
+                          style={{
+                            backgroundColor: theme.cardSubtle,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '12px',
+                            padding: '10px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px',
+                          }}
+                        >
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '6px' }}>
+                            <input
+                              type="text"
+                              value={sub.name}
+                              onChange={(e) => handleUpdateSubscription(sub.id, { name: e.target.value })}
+                              style={baseInputStyle}
+                            />
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={Number(sub.price).toLocaleString('es-CO')}
+                              onChange={(e) =>
+                                handleUpdateSubscription(sub.id, { price: parseMoneyInput(e.target.value) })
+                              }
+                              style={baseInputStyle}
+                            />
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 1.4fr', gap: '6px' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="31"
+                              value={sub.billingDay}
+                              onChange={(e) =>
+                                handleUpdateSubscription(sub.id, {
+                                  billingDay: Math.max(1, Math.min(31, Number(e.target.value) || 1)),
+                                })
+                              }
+                              style={baseInputStyle}
+                            />
+                            <select
+                              value={sub.accountId}
+                              onChange={(e) => handleUpdateSubscription(sub.id, { accountId: e.target.value })}
+                              style={baseInputStyle}
+                            >
+                              {data.accounts.map((acc) => (
+                                <option key={acc.id} value={acc.id}>
+                                  {acc.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* 7. EDITAR DESEOS */}
+            <section
+              style={{
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '18px',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => toggleSection('editarDeseos')}
+                style={{
+                  width: '100%',
+                  padding: '15px 16px',
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textPrimary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: '14px', fontWeight: 700 }}>
+                  Editar deseos ({data.wishes.length})
+                </span>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  {openSections.editarDeseos ? '▲' : '▼'}
+                </span>
+              </button>
+
+              <div className={`smooth-collapse ${openSections.editarDeseos ? 'open' : 'closed'}`}>
+                <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {data.wishes.length === 0 ? (
+                      <div style={{ fontSize: '12px', color: theme.textMuted }}>No hay deseos para editar.</div>
+                    ) : (
+                      data.wishes.map((w) => (
+                        <div
+                          key={w.id}
+                          style={{
+                            backgroundColor: theme.cardSubtle,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '12px',
+                            padding: '10px',
+                            display: 'grid',
+                            gridTemplateColumns: '1.3fr 1fr',
+                            gap: '6px',
+                          }}
+                        >
+                          <input
+                            type="text"
+                            value={w.name}
+                            onChange={(e) => handleUpdateWish(w.id, { name: e.target.value })}
+                            style={baseInputStyle}
+                          />
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={Number(w.price).toLocaleString('es-CO')}
+                            onChange={(e) => handleUpdateWish(w.id, { price: parseMoneyInput(e.target.value) })}
+                            style={baseInputStyle}
+                          />
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+
             {/* Botón directo al final: Descargar PDF */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
               <button
@@ -3689,6 +4222,143 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* ================= MODAL TRANSFERENCIA ENTRE CUENTAS ================= */}
+      {showTransferModal && (
+        <div
+          className="ios-backdrop-enter"
+          onClick={() => setShowTransferModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            backgroundColor: 'rgba(0, 0, 0, 0.78)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+          }}
+        >
+          <form
+            className="ios-sheet-enter"
+            onSubmit={handleExecuteTransfer}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '480px',
+              backgroundColor: theme.cardSolid,
+              borderTop: `1px solid ${theme.borderStrong}`,
+              borderRadius: '24px 24px 0 0',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '16px', fontWeight: 700 }}>Transferir entre cuentas</span>
+              <button
+                type="button"
+                onClick={() => setShowTransferModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {transferError && (
+              <div
+                style={{
+                  backgroundColor: theme.dangerBg,
+                  border: `1px solid ${theme.danger}`,
+                  color: theme.danger,
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                }}
+              >
+                {transferError}
+              </div>
+            )}
+
+            <div>
+              <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
+                Desde qué cuenta sale
+              </label>
+              <select
+                value={transferFromId}
+                onChange={(e) => {
+                  setTransferFromId(e.target.value);
+                  if (transferError) setTransferError('');
+                }}
+                style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
+              >
+                {data.accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.name} ({formatMoneyByCurrency(acc.balance, currency)})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
+                Hacia qué cuenta llega
+              </label>
+              <select
+                value={transferToId}
+                onChange={(e) => {
+                  setTransferToId(e.target.value);
+                  if (transferError) setTransferError('');
+                }}
+                style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
+              >
+                {data.accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.name} ({formatMoneyByCurrency(acc.balance, currency)})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="Valor a transferir (Ej: 40.000)"
+              value={transferAmount}
+              onChange={(e) => {
+                setTransferAmount(formatMoneyInput(e.target.value));
+                if (transferError) setTransferError('');
+              }}
+              style={{ ...baseInputStyle, fontSize: '16px', fontWeight: 700, padding: '12px' }}
+            />
+
+            <button
+              type="submit"
+              style={{
+                width: '100%',
+                padding: '13px',
+                borderRadius: '14px',
+                border: 'none',
+                backgroundColor: theme.accentBlue,
+                color: '#FFFFFF',
+                fontSize: '14px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Confirmar transferencia
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* ================= VISTA / MODAL PDF COMPLETO CON BOTÓN VOLVER ================= */}
       {showPdfPreviewModal && (
@@ -3745,7 +4415,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Resumen General */}
             <div
               style={{
                 background: theme.card,
@@ -3781,7 +4450,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Cuentas */}
             <div
               style={{
                 background: theme.card,
@@ -3814,7 +4482,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Deudas */}
             <div
               style={{
                 background: theme.card,
@@ -3847,7 +4514,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Suscripciones */}
             <div
               style={{
                 background: theme.card,
@@ -3880,7 +4546,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Lista de deseos */}
             <div
               style={{
                 background: theme.card,
@@ -3913,7 +4578,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Todos los movimientos */}
             <div
               style={{
                 background: theme.card,
@@ -3946,16 +4610,21 @@ export default function App() {
                           {tx.categoryName} ({tx.accountName})
                         </div>
                         <div style={{ color: theme.textMuted }}>
-                          {formatDateTimeLabel(tx.date)}{tx.note ? ` • ${tx.note}` : ''}
+                          {formatDateTimeLabel(tx.date)}{tx.note && tx.type !== 'transferencia' ? ` • ${tx.note}` : ''}
                         </div>
                       </div>
                       <span
                         style={{
                           fontWeight: 700,
-                          color: tx.type === 'ingreso' ? theme.success : theme.danger,
+                          color:
+                            tx.type === 'transferencia'
+                              ? theme.accentBlueText
+                              : tx.type === 'ingreso'
+                              ? theme.success
+                              : theme.danger,
                         }}
                       >
-                        {tx.type === 'ingreso' ? '+' : '-'}
+                        {tx.type === 'ingreso' ? '+' : tx.type === 'gasto' ? '-' : '⇄ '}
                         {formatMoneyByCurrency(tx.amount, currency)}
                       </span>
                     </div>
@@ -4142,7 +4811,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Formulario de abono animado al tocar una deuda */}
             <div className={`smooth-collapse ${selectedDebtForPayment ? 'open' : 'closed'}`}>
               <div className="smooth-collapse-inner">
                 {selectedDebtForPayment && (
@@ -4257,7 +4925,7 @@ export default function App() {
 
             <button
               type="button"
-              onClick={openOnlyDebtSectionInConfig}
+              onClick={() => openOnlySectionInConfig('deudas')}
               style={{
                 width: '100%',
                 padding: '11px',
@@ -4276,78 +4944,120 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= MODAL CONFIRMAR COBRAR SUSCRIPCIÓN ================= */}
-      {subToChargeConfirm && (
-        <div
-          className="ios-backdrop-enter"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 65,
-            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '20px',
-          }}
-        >
+      {/* ================= MODAL CONFIRMAR COBRAR SUSCRIPCIÓN (CON OPCIÓN A DEUDA SI FALTA PLATA) ================= */}
+      {subToChargeConfirm && (() => {
+        const linkedAcc = data.accounts.find((a) => a.id === subToChargeConfirm.accountId);
+        const accBal = linkedAcc ? Number(linkedAcc.balance) || 0 : 0;
+        const lacksFunds = (Number(subToChargeConfirm.price) || 0) > accBal;
+
+        return (
           <div
-            className="ios-screen-enter"
+            className="ios-backdrop-enter"
             style={{
-              width: '100%',
-              maxWidth: '340px',
-              backgroundColor: theme.cardSolid,
-              border: `1px solid ${theme.borderStrong}`,
-              borderRadius: '20px',
+              position: 'fixed',
+              inset: 0,
+              zIndex: 65,
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               padding: '20px',
-              textAlign: 'center',
             }}
           >
-            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
-              ¿Ya pagaste "{subToChargeConfirm.name}"?
-            </div>
-            <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
-              ¿Seguro que quieres cobrar <strong>{renderMoney(subToChargeConfirm.price)}</strong> de{' '}
-              <strong>{subToChargeConfirm.accountName}</strong>?
-            </div>
+            <div
+              className="ios-screen-enter"
+              style={{
+                width: '100%',
+                maxWidth: '350px',
+                backgroundColor: theme.cardSolid,
+                border: `1px solid ${theme.borderStrong}`,
+                borderRadius: '20px',
+                padding: '20px',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+                ¿Ya pagaste "{subToChargeConfirm.name}"?
+              </div>
+              <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '12px' }}>
+                Valor: <strong>{renderMoney(subToChargeConfirm.price)}</strong> • Cuenta:{' '}
+                <strong>{subToChargeConfirm.accountName}</strong> ({renderMoney(accBal)})
+              </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                onClick={() => setSubToChargeConfirm(null)}
-                style={{
-                  flex: 1,
-                  padding: '11px',
-                  borderRadius: '12px',
-                  border: `1px solid ${theme.border}`,
-                  backgroundColor: theme.cardSubtle,
-                  color: theme.textPrimary,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => executeChargeSubscription(subToChargeConfirm)}
-                style={{
-                  flex: 1,
-                  padding: '11px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  backgroundColor: theme.accentBlue,
-                  color: '#FFFFFF',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Sí, cobrar
-              </button>
+              {lacksFunds && (
+                <div
+                  style={{
+                    backgroundColor: theme.warningBg,
+                    border: `1px solid ${theme.warning}`,
+                    color: theme.warning,
+                    borderRadius: '10px',
+                    padding: '8px 10px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    marginBottom: '12px',
+                  }}
+                >
+                  No alcanza el saldo de esta cuenta para cobrarla. ¿Quieres pasarla a Deudas?
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setSubToChargeConfirm(null)}
+                  style={{
+                    flex: 1,
+                    padding: '11px',
+                    borderRadius: '12px',
+                    border: `1px solid ${theme.border}`,
+                    backgroundColor: theme.cardSubtle,
+                    color: theme.textPrimary,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+                {lacksFunds ? (
+                  <button
+                    type="button"
+                    onClick={() => handleMoveSubscriptionToDebt(subToChargeConfirm)}
+                    style={{
+                      flex: 1,
+                      padding: '11px',
+                      borderRadius: '12px',
+                      border: 'none',
+                      backgroundColor: '#D97706',
+                      color: '#FFFFFF',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Pasar a deuda
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => executeChargeSubscription(subToChargeConfirm)}
+                    style={{
+                      flex: 1,
+                      padding: '11px',
+                      borderRadius: '12px',
+                      border: 'none',
+                      backgroundColor: theme.accentBlue,
+                      color: '#FFFFFF',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Sí, cobrar
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ================= MODAL CONFIRMAR ELIMINAR MOVIMIENTO (SIEMPRE PREGUNTA) ================= */}
       {txToDelete && (
@@ -5330,7 +6040,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= BARRA DE NAVEGACIÓN INFERIOR (5 PESTAÑAS) ================= */}
+      {/* ================= BARRA DE NAVEGACIÓN INFERIOR (5 PESTAÑAS PRINCIPALES) ================= */}
       <nav
         style={{
           position: 'fixed',
