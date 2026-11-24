@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const STORAGE_KEY = 'artpay_data_v11';
+const STORAGE_KEY = 'artpay_data_v12';
 
 const DEFAULT_DATA = {
   userName: '',
@@ -237,8 +237,15 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [accountsExpanded, setAccountsExpanded] = useState(true);
 
+  // Apartado/modal dedicado de Deudas
+  const [showDebtSectionModal, setShowDebtSectionModal] = useState(false);
+
   const [noAccountAlert, setNoAccountAlert] = useState(false);
+
+  // Confirmaciones obligatorias sin "No volver a preguntar" (movimientos, suscripciones y deseos)
   const [txToDelete, setTxToDelete] = useState(null);
+  const [subToDelete, setSubToDelete] = useState(null);
+  const [wishToDelete, setWishToDelete] = useState(null);
 
   // Filtro de rango en Estadísticas: 'dia' | 'semana' | 'mes'
   const [statsPeriod, setStatsPeriod] = useState('dia');
@@ -305,7 +312,7 @@ export default function App() {
   const [newDebtAmount, setNewDebtAmount] = useState('');
   const [configNotice, setConfigNotice] = useState('');
 
-  // Confirmaciones de borrado
+  // Confirmaciones de borrado en Configuración
   const [catToDelete, setCatToDelete] = useState(null);
   const [showReenableCatPrompt, setShowReenableCatPrompt] = useState(false);
   const [accToDelete, setAccToDelete] = useState(null);
@@ -627,11 +634,13 @@ export default function App() {
     }));
   };
 
-  const handleDeleteSubscription = (id) => {
+  const confirmDeleteSubscription = () => {
+    if (!subToDelete) return;
     setData((prev) => ({
       ...prev,
-      subscriptions: prev.subscriptions.filter((s) => s.id !== id),
+      subscriptions: prev.subscriptions.filter((s) => s.id !== subToDelete.id),
     }));
+    setSubToDelete(null);
   };
 
   const computedSubscriptions = useMemo(() => {
@@ -897,11 +906,13 @@ export default function App() {
     setWishPrice('');
   };
 
-  const handleDeleteWish = (id) => {
+  const confirmDeleteWish = () => {
+    if (!wishToDelete) return;
     setData((prev) => ({
       ...prev,
-      wishes: prev.wishes.filter((w) => w.id !== id),
+      wishes: prev.wishes.filter((w) => w.id !== wishToDelete.id),
     }));
+    setWishToDelete(null);
   };
 
   const reorderWishes = (fromIdx, toIdx) => {
@@ -1675,12 +1686,9 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Deudas (total en rojo + código de moneda a 1/4) */}
+            {/* Tarjeta de Deudas (abre apartado/vista de Deudas, total en rojo + código de moneda a 1/4) */}
             <section
-              onClick={() => {
-                setActiveTab('config');
-                setOpenSections((s) => ({ ...s, deudas: true }));
-              }}
+              onClick={() => setShowDebtSectionModal(true)}
               style={{
                 background: theme.card,
                 border: `1px solid ${theme.border}`,
@@ -1713,8 +1721,8 @@ export default function App() {
                 </div>
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
                   {data.debts.length === 0
-                    ? 'Sin deudas • Toca para gestionar en Configuración'
-                    : `${data.debts.length} ${data.debts.length === 1 ? 'deuda activa' : 'deudas activas'}`}
+                    ? 'Sin deudas • Toca para ver o agregar'
+                    : `${data.debts.length} ${data.debts.length === 1 ? 'deuda activa' : 'deudas activas'} • Toca para ver`}
                 </div>
               </div>
 
@@ -2286,7 +2294,7 @@ export default function App() {
                       )}
                       <button
                         type="button"
-                        onClick={() => handleDeleteSubscription(sub.id)}
+                        onClick={() => setSubToDelete(sub)}
                         style={{
                           width: '28px',
                           height: '28px',
@@ -2526,7 +2534,7 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteWish(wish.id)}
+                          onClick={() => setWishToDelete(wish)}
                           style={{
                             width: '28px',
                             height: '28px',
@@ -3341,6 +3349,185 @@ export default function App() {
         )}
       </main>
 
+      {/* ================= APARTADO / MODAL DEDICADO DE DEUDAS ================= */}
+      {showDebtSectionModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 55,
+            backgroundColor: 'rgba(0, 0, 0, 0.78)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            className="ios-sheet-enter"
+            style={{
+              width: '100%',
+              maxWidth: '480px',
+              backgroundColor: theme.cardSolid,
+              borderTop: `1px solid ${theme.borderStrong}`,
+              borderRadius: '24px 24px 0 0',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              boxSizing: 'border-box',
+              maxHeight: '88dvh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: '16px', fontWeight: 700 }}>Deudas</div>
+                <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  Total: <strong style={{ color: theme.danger }}>{renderMoney(totalDebts)}</strong>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDebtSectionModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {data.debts.length === 0 ? (
+              <div
+                style={{
+                  backgroundColor: theme.cardSubtle,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '14px',
+                  padding: '18px',
+                  textAlign: 'center',
+                  fontSize: '13px',
+                  color: theme.textMuted,
+                }}
+              >
+                No tienes deudas registradas.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {data.debts.map((debt, idx) => {
+                  const dStyle = getDebtRankStyle(idx);
+                  return (
+                    <div
+                      key={debt.id}
+                      style={{
+                        backgroundColor: theme.cardSubtle,
+                        border: `1px solid ${dStyle.border}`,
+                        borderRadius: '14px',
+                        padding: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                        <span
+                          style={{
+                            width: '22px',
+                            height: '22px',
+                            borderRadius: '50%',
+                            backgroundColor: dStyle.badgeBg,
+                            color: dStyle.badgeColor,
+                            fontSize: '11px',
+                            fontWeight: 800,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {idx + 1}
+                        </span>
+                        <span style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
+                          {debt.name}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '14px', fontWeight: 800, color: dStyle.amountColor }}>
+                          {renderMoney(debt.amount)}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => reorderDebts(idx, idx - 1)}
+                          style={{
+                            width: '26px',
+                            height: '26px',
+                            borderRadius: '7px',
+                            border: `1px solid ${theme.border}`,
+                            backgroundColor: theme.inputBg,
+                            color: theme.textPrimary,
+                            opacity: idx === 0 ? 0.35 : 1,
+                            fontSize: '11px',
+                            cursor: idx === 0 ? 'default' : 'pointer',
+                          }}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === data.debts.length - 1}
+                          onClick={() => reorderDebts(idx, idx + 1)}
+                          style={{
+                            width: '26px',
+                            height: '26px',
+                            borderRadius: '7px',
+                            border: `1px solid ${theme.border}`,
+                            backgroundColor: theme.inputBg,
+                            color: theme.textPrimary,
+                            opacity: idx === data.debts.length - 1 ? 0.35 : 1,
+                            fontSize: '11px',
+                            cursor: idx === data.debts.length - 1 ? 'default' : 'pointer',
+                          }}
+                        >
+                          ↓
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowDebtSectionModal(false);
+                setActiveTab('config');
+                setOpenSections((s) => ({ ...s, deudas: true }));
+              }}
+              style={{
+                width: '100%',
+                padding: '11px',
+                borderRadius: '12px',
+                border: `1px solid ${theme.borderStrong}`,
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Agregar, editar o eliminar deudas en Configuración
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ================= MODAL CONFIRMAR ELIMINAR MOVIMIENTO (SIEMPRE PREGUNTA) ================= */}
       {txToDelete && (
         <div
@@ -3394,6 +3581,148 @@ export default function App() {
               <button
                 type="button"
                 onClick={confirmDeleteTransaction}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.danger,
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL CONFIRMAR ELIMINAR SUSCRIPCIÓN (SIEMPRE PREGUNTA) ================= */}
+      {subToDelete && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 65,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            className="ios-screen-enter"
+            style={{
+              width: '100%',
+              maxWidth: '340px',
+              backgroundColor: theme.cardSolid,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '20px',
+              padding: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+              ¿Seguro que quieres eliminar "{subToDelete.name}"?
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
+              Esta suscripción se quitará de tu lista.
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setSubToDelete(null)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.cardSubtle,
+                  color: theme.textPrimary,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSubscription}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.danger,
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL CONFIRMAR ELIMINAR DESEO (SIEMPRE PREGUNTA) ================= */}
+      {wishToDelete && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 65,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            className="ios-screen-enter"
+            style={{
+              width: '100%',
+              maxWidth: '340px',
+              backgroundColor: theme.cardSolid,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '20px',
+              padding: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+              ¿Seguro que quieres eliminar "{wishToDelete.name}"?
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
+              Este deseo se quitará de tu lista.
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setWishToDelete(null)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.cardSubtle,
+                  color: theme.textPrimary,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteWish}
                 style={{
                   flex: 1,
                   padding: '11px',
