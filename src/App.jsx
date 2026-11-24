@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.21';
+const APP_VERSION = 'v1.0.22';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -1173,33 +1173,48 @@ export default function App() {
     return data.subscriptions
       .map((sub) => {
         const chargedThisMonth = sub.lastChargedMonth === currentMonthKey;
+        const safeDay = Math.max(1, Math.min(31, Number(sub.billingDay) || 1));
+        const maxDayThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const dueThisMonthDate = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          Math.min(safeDay, maxDayThisMonth)
+        );
+
         const targetDate = chargedThisMonth
           ? getNextMonthCycleDate(sub.billingDay, now)
-          : getNextBillingDate(sub.billingDay, now);
+          : dueThisMonthDate;
 
         const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-        const daysLeft = Math.max(0, Math.round((targetMidnight - todayMidnight) / msPerDay));
+        const diffDays = Math.round((targetMidnight - todayMidnight) / msPerDay);
+        const isOverdue = !chargedThisMonth && diffDays < 0;
+        const isDueToday = !chargedThisMonth && diffDays === 0;
+        const daysLeft = Math.max(0, diffDays);
 
         const linkedAcc = data.accounts.find((a) => a.id === sub.accountId);
         const accBal = linkedAcc ? Number(linkedAcc.balance) || 0 : 0;
-        const insufficientSoon = !chargedThisMonth && daysLeft <= 7 && (Number(sub.price) || 0) > accBal;
 
-        let badgeText = daysLeft === 0 ? 'Hoy' : daysLeft === 1 ? 'Falta 1 día' : `Faltan ${daysLeft} días`;
+        let badgeText = chargedThisMonth
+          ? `Pagada • Próx. ${daysLeft}d`
+          : isOverdue
+          ? Math.abs(diffDays) === 1
+            ? 'Vencida hace 1 día'
+            : `Vencida hace ${Math.abs(diffDays)} días`
+          : isDueToday
+          ? 'Hoy es el cobro'
+          : daysLeft === 1
+          ? 'Falta 1 día'
+          : `Faltan ${daysLeft} días`;
+
         let badgeColor = '#60A5FA';
         let badgeBg = 'rgba(37, 99, 235, 0.18)';
 
-        if (chargedThisMonth && daysLeft > 10) {
-          badgeColor = '#60A5FA';
-          badgeBg = 'rgba(37, 99, 235, 0.18)';
-        } else if (daysLeft <= 2) {
+        if (isOverdue) {
           badgeColor = '#F87171';
-          badgeBg = 'rgba(239, 68, 68, 0.18)';
-        } else if (daysLeft <= 7) {
-          badgeColor = '#FB923C';
-          badgeBg = 'rgba(249, 115, 22, 0.18)';
-        } else if (daysLeft <= 14) {
+          badgeBg = 'rgba(239, 68, 68, 0.2)';
+        } else if (isDueToday) {
           badgeColor = '#FACC15';
-          badgeBg = 'rgba(234, 179, 8, 0.18)';
+          badgeBg = 'rgba(234, 179, 8, 0.22)';
         }
 
         const dateLabel = targetDate.toLocaleDateString('es-CO', {
@@ -1211,11 +1226,13 @@ export default function App() {
           ...sub,
           chargedThisMonth,
           daysLeft,
+          diffDays,
+          isOverdue,
+          isDueToday,
           dateLabel,
           badgeText,
           badgeColor,
           badgeBg,
-          insufficientSoon,
           accountBal: accBal,
         };
       })
@@ -1223,23 +1240,18 @@ export default function App() {
         if (a.chargedThisMonth !== b.chargedThisMonth) {
           return a.chargedThisMonth ? 1 : -1;
         }
-        return a.daysLeft - b.daysLeft;
+        return a.diffDays - b.diffDays;
       });
   }, [data.subscriptions, data.accounts, currentMonthKey]);
 
-  const upcomingLowBalanceSubs = useMemo(
-    () => computedSubscriptions.filter((s) => s.insufficientSoon),
-    [computedSubscriptions]
-  );
-
   const subAlertStatus = useMemo(() => {
-    const dueSoon = computedSubscriptions.filter((s) => !s.chargedThisMonth && s.daysLeft <= 7);
-    if (dueSoon.length === 0) return null;
-    const isUrgentRed = dueSoon.some((s) => s.daysLeft <= 2 || s.insufficientSoon);
+    const activeAlerts = computedSubscriptions.filter((s) => !s.chargedThisMonth && (s.isDueToday || s.isOverdue));
+    if (activeAlerts.length === 0) return null;
+    const hasOverdue = activeAlerts.some((s) => s.isOverdue);
     return {
-      count: dueSoon.length,
-      color: isUrgentRed ? '#EF4444' : '#F59E0B',
-      textColor: isUrgentRed ? '#FFFFFF' : '#090B0E',
+      count: activeAlerts.length,
+      color: hasOverdue ? '#EF4444' : '#FACC15',
+      textColor: hasOverdue ? '#FFFFFF' : '#090B0E',
     };
   }, [computedSubscriptions]);
 
@@ -3198,22 +3210,7 @@ endstream`;
               )}
             </div>
 
-            {upcomingLowBalanceSubs.length > 0 && (
-              <div
-                style={{
-                  backgroundColor: theme.warningBg,
-                  border: `1px solid ${theme.warning}`,
-                  color: theme.warning,
-                  borderRadius: '12px',
-                  padding: '10px 12px',
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  lineHeight: 1.4,
-                }}
-              >
-                Atención: {upcomingLowBalanceSubs.map((s) => s.name).join(', ')} está a pocos días de cobrarse y no alcanza el saldo de su cuenta.
-              </div>
-            )}
+
 
             {subError && (
               <div
@@ -3347,8 +3344,10 @@ endstream`;
                     style={{
                       background: theme.card,
                       border: `1px solid ${
-                        sub.insufficientSoon
-                          ? theme.warning
+                        sub.isOverdue
+                          ? theme.danger
+                          : sub.isDueToday
+                          ? '#FACC15'
                           : sub.chargedThisMonth
                           ? theme.border
                           : theme.borderStrong
@@ -3379,13 +3378,9 @@ endstream`;
                         </span>
                       </div>
                       <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '3px' }}>
-                        Se cobra el <strong>{sub.dateLabel}</strong> • Sale de: <strong>{sub.accountName}</strong>
+                        {sub.isOverdue ? 'Debió cobrarse el' : 'Se cobra el'} <strong>{sub.dateLabel}</strong> • Sale de:{' '}
+                        <strong>{sub.accountName}</strong>
                       </div>
-                      {sub.insufficientSoon && (
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: theme.warning, marginTop: '2px' }}>
-                          Falta saldo en {sub.accountName} para este cobro próximo
-                        </div>
-                      )}
                       <div style={{ fontSize: '13px', fontWeight: 700, color: theme.danger, marginTop: '2px' }}>
                         {renderMoney(sub.price)}
                       </div>
@@ -6262,36 +6257,44 @@ endstream`;
         </div>
       )}
 
-      {/* ================= MODAL REGISTRAR MOVIMIENTO (CON SUBCATEGORÍA Y UBICACIÓN OPCIONAL) ================= */}
+      {/* ================= MODAL FLOTANTE CENTRADO: REGISTRAR MOVIMIENTO ================= */}
       {showTxModal && (
         <div
           className="ios-backdrop-enter"
+          onClick={() => {
+            if (!txSavingLocation) setShowTxModal(false);
+          }}
           style={{
             position: 'fixed',
             inset: 0,
-            zIndex: 50,
-            backgroundColor: 'rgba(0, 0, 0, 0.78)',
+            zIndex: 60,
+            backgroundColor: 'rgba(0, 0, 0, 0.68)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
             display: 'flex',
-            alignItems: 'flex-end',
+            alignItems: 'center',
             justifyContent: 'center',
+            padding: '16px',
           }}
         >
           <form
-            className="ios-sheet-enter"
+            className="ios-screen-enter"
+            onClick={(e) => e.stopPropagation()}
             onSubmit={handleSaveTransaction}
             style={{
               width: '100%',
-              maxWidth: '480px',
+              maxWidth: '420px',
               backgroundColor: theme.cardSolid,
-              borderTop: `1px solid ${theme.borderStrong}`,
-              borderRadius: '24px 24px 0 0',
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '24px',
               padding: '20px',
               display: 'flex',
               flexDirection: 'column',
               gap: '12px',
               boxSizing: 'border-box',
-              maxHeight: '90dvh',
+              maxHeight: '86dvh',
               overflowY: 'auto',
+              boxShadow: '0 24px 54px rgba(0, 0, 0, 0.72)',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
