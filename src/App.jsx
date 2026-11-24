@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.20';
+const APP_VERSION = 'v1.0.21';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -26,6 +26,7 @@ const DEFAULT_DATA = {
   transactions: [],
   wishes: [],
   subscriptions: [],
+  quickAmounts: [],
   firstOpenedAt: null,
   lastBackupAt: null,
   onboardingDismissed: false,
@@ -237,6 +238,12 @@ const normalizeStoredData = (parsed) => ({
   transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
   wishes: Array.isArray(parsed.wishes) ? parsed.wishes : [],
   subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
+  quickAmounts: Array.isArray(parsed.quickAmounts)
+    ? parsed.quickAmounts
+        .map((n) => Number(n) || 0)
+        .filter((n) => n > 0)
+        .slice(0, 5)
+    : [],
   categories: Array.isArray(parsed.categories)
     ? parsed.categories.map((c) => {
         if (typeof c === 'string') {
@@ -503,6 +510,8 @@ export default function App() {
   const [newAccName, setNewAccName] = useState('');
   const [newAccBalance, setNewAccBalance] = useState('');
   const [accFormAlert, setAccFormAlert] = useState('');
+  const [newQuickAmount, setNewQuickAmount] = useState('');
+  const [quickAmountAlert, setQuickAmountAlert] = useState('');
 
   const [newCatName, setNewCatName] = useState('');
   const [newCatIcon, setNewCatIcon] = useState('none');
@@ -827,6 +836,38 @@ export default function App() {
     setData((prev) => ({
       ...prev,
       accounts: prev.accounts.map((a) => (a.id === id ? { ...a, balance } : a)),
+    }));
+  };
+
+  const handleAddQuickAmount = (e) => {
+    e.preventDefault();
+    setQuickAmountAlert('');
+    const current = Array.isArray(data.quickAmounts) ? data.quickAmounts : [];
+    if (current.length >= 5) {
+      setQuickAmountAlert('Máximo 5 precios predeterminados.');
+      return;
+    }
+    const val = parseMoneyInput(newQuickAmount);
+    if (!val || val <= 0) {
+      setQuickAmountAlert('Escribe un precio mayor a 0.');
+      return;
+    }
+    if (current.includes(val)) {
+      setQuickAmountAlert('Ese precio ya está en tu lista.');
+      return;
+    }
+    setData((prev) => ({
+      ...prev,
+      quickAmounts: [...(prev.quickAmounts || []), val].slice(0, 5),
+    }));
+    setNewQuickAmount('');
+  };
+
+  const handleRemoveQuickAmount = (valToRemove) => {
+    setQuickAmountAlert('');
+    setData((prev) => ({
+      ...prev,
+      quickAmounts: (prev.quickAmounts || []).filter((v) => v !== valToRemove),
     }));
   };
 
@@ -4072,6 +4113,119 @@ endstream`;
                         + Agregar cuenta
                       </button>
                     </form>
+
+                    {/* Precios predeterminados rápidos (máximo 5) */}
+                    <div
+                      style={{
+                        borderTop: `1px solid ${theme.border}`,
+                        paddingTop: '12px',
+                        marginTop: '4px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 700 }}>
+                          Precios predeterminados ({(data.quickAmounts || []).length}/5)
+                        </span>
+                        <span style={{ fontSize: '11px', color: theme.textMuted }}>
+                          Máx. 5
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.35 }}>
+                        Aparecerán como botones rápidos al registrar un movimiento para no escribirlos cada vez.
+                      </div>
+
+                      {quickAmountAlert && (
+                        <div
+                          style={{
+                            backgroundColor: theme.dangerBg,
+                            border: `1px solid ${theme.danger}`,
+                            color: theme.danger,
+                            borderRadius: '10px',
+                            padding: '7px 10px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {quickAmountAlert}
+                        </div>
+                      )}
+
+                      {(data.quickAmounts || []).length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {(data.quickAmounts || []).map((amt) => (
+                            <span
+                              key={amt}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '6px 10px',
+                                borderRadius: '999px',
+                                backgroundColor: theme.accentBlueSoft,
+                                border: `1px solid ${theme.accentBlue}`,
+                                color: theme.accentBlueText,
+                                fontSize: '12px',
+                                fontWeight: 700,
+                              }}
+                            >
+                              <span>{formatMoneyByCurrency(amt, currency)}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveQuickAmount(amt)}
+                                title="Quitar precio"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: theme.accentBlueText,
+                                  cursor: 'pointer',
+                                  fontSize: '12px',
+                                  padding: 0,
+                                  lineHeight: 1,
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {(data.quickAmounts || []).length < 5 && (
+                        <form onSubmit={handleAddQuickAmount} style={{ display: 'flex', gap: '8px' }}>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="Ej: 10.000"
+                            value={newQuickAmount}
+                            onChange={(e) => {
+                              setNewQuickAmount(formatMoneyInput(e.target.value));
+                              if (quickAmountAlert) setQuickAmountAlert('');
+                            }}
+                            style={{ ...baseInputStyle, flex: 1 }}
+                          />
+                          <button
+                            type="submit"
+                            style={{
+                              padding: '10px 14px',
+                              borderRadius: '10px',
+                              border: 'none',
+                              backgroundColor: theme.accentBlue,
+                              color: '#FFFFFF',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            + Precio
+                          </button>
+                        </form>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -6208,6 +6362,36 @@ endstream`;
               required
               style={{ ...baseInputStyle, fontSize: '16px', fontWeight: 700, padding: '12px' }}
             />
+
+            {(data.quickAmounts || []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {(data.quickAmounts || []).map((preset) => {
+                  const isCurrent = parseMoneyInput(txAmount) === preset;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setTxAmount(Number(preset).toLocaleString('es-CO'));
+                        if (txError) setTxError('');
+                      }}
+                      style={{
+                        padding: '6px 11px',
+                        borderRadius: '999px',
+                        border: isCurrent ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                        backgroundColor: isCurrent ? theme.accentBlueSoft : theme.cardSubtle,
+                        color: isCurrent ? theme.accentBlueText : theme.textPrimary,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {formatMoneyByCurrency(preset, currency)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <select
               value={txAccount}
