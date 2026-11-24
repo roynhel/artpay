@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.16';
+const APP_VERSION = 'v1.0.17';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
+  'artpay_data_v16',
   'artpay_data_v15',
   'artpay_data_v14',
   'artpay_data_v13',
@@ -210,12 +211,85 @@ const normalizeStoredData = (parsed) => ({
   subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
   categories: Array.isArray(parsed.categories)
     ? parsed.categories.map((c) => {
-        if (typeof c === 'string') return { id: c, name: c, icon: 'none' };
+        if (typeof c === 'string') {
+          return { id: c, name: c, icon: 'none', subcategories: [] };
+        }
         const iconId = ALLOWED_ICON_IDS.has(c.icon) ? c.icon : 'none';
-        return { id: c.id || String(Date.now()), name: c.name, icon: iconId };
+        const subs = Array.isArray(c.subcategories)
+          ? c.subcategories.filter((s) => typeof s === 'string' && s.trim())
+          : [];
+        return {
+          id: c.id || String(Date.now()),
+          name: c.name,
+          icon: iconId,
+          subcategories: subs,
+        };
       })
     : [],
 });
+
+const captureCurrentLocation = () =>
+  new Promise((resolve) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      resolve({ ok: false, error: 'Tu navegador no soporta geolocalización.' });
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
+        const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+        let placeLabel = '';
+
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 3500);
+          const resp = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`,
+            { signal: ctrl.signal }
+          );
+          clearTimeout(timer);
+          if (resp.ok) {
+            const geoJson = await resp.json();
+            const addr = geoJson.address || {};
+            const parts = [
+              addr.amenity || addr.shop || addr.building || addr.road,
+              addr.suburb || addr.neighbourhood || addr.city_district,
+              addr.city || addr.town || addr.village,
+            ].filter(Boolean);
+            placeLabel = parts.slice(0, 3).join(', ');
+          }
+        } catch {
+          // Si no hay red o falla el geocoding inverso, se conservan las coordenadas y el mapa
+        }
+
+        resolve({
+          ok: true,
+          location: {
+            lat,
+            lng,
+            label: placeLabel || `${lat}, ${lng}`,
+            mapUrl,
+          },
+        });
+      },
+      (err) => {
+        let msg = 'No se pudo obtener la ubicación.';
+        if (err && err.code === 1) {
+          msg = 'Permiso de ubicación denegado. Actívalo en el navegador si deseas guardarla.';
+        } else if (err && err.code === 3) {
+          msg = 'Se agotó el tiempo al buscar la ubicación.';
+        }
+        resolve({ ok: false, error: msg });
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 8000,
+        maximumAge: 60000,
+      }
+    );
+  });
 
 export default function App() {
   const [data, setData] = useState(() => {
@@ -286,6 +360,9 @@ export default function App() {
   const [txFilterType, setTxFilterType] = useState('todos'); // 'todos' | 'ingreso' | 'gasto'
   const [txFilterAccountId, setTxFilterAccountId] = useState('todas');
 
+  // Detalle de movimiento al tocarlo
+  const [selectedTxDetail, setSelectedTxDetail] = useState(null);
+
   // Apartado/modal dedicado de Deudas + selección de deuda para abonar al tocarla
   const [showDebtSectionModal, setShowDebtSectionModal] = useState(false);
   const [selectedDebtForPayment, setSelectedDebtForPayment] = useState(null);
@@ -336,13 +413,18 @@ export default function App() {
     }
   };
 
-  // Modal de nuevo movimiento
+  // Modal de nuevo movimiento (con subcategoría opcional y ubicación opcional)
   const [showTxModal, setShowTxModal] = useState(false);
   const [txType, setTxType] = useState('gasto');
   const [txAmount, setTxAmount] = useState('');
   const [txAccount, setTxAccount] = useState('');
+  const [txCategoryId, setTxCategoryId] = useState('');
   const [txCategoryName, setTxCategoryName] = useState('');
   const [txCategoryIcon, setTxCategoryIcon] = useState('none');
+  const [txSubcategoryName, setTxSubcategoryName] = useState('');
+  const [txSaveLocation, setTxSaveLocation] = useState(false);
+  const [txLocationStatus, setTxLocationStatus] = useState('');
+  const [txSavingLocation, setTxSavingLocation] = useState(false);
   const [txNote, setTxNote] = useState('');
   const [txError, setTxError] = useState('');
 
@@ -371,6 +453,7 @@ export default function App() {
   const [newCatName, setNewCatName] = useState('');
   const [newCatIcon, setNewCatIcon] = useState('none');
   const [catFormAlert, setCatFormAlert] = useState('');
+  const [subcatDraftByCatId, setSubcatDraftByCatId] = useState({});
 
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
@@ -562,8 +645,10 @@ export default function App() {
       accountId: fromAcc.id,
       accountName: `${fromAcc.name} → ${toAcc.name}`,
       categoryName: 'Transferencia entre cuentas',
+      subcategoryName: '',
       categoryIcon: 'none',
       note: `De ${fromAcc.name} a ${toAcc.name}`,
+      location: null,
       date: new Date().toISOString(),
     };
 
@@ -628,8 +713,10 @@ export default function App() {
       accountId: chosenAcc.id,
       accountName: chosenAcc.name,
       categoryName: `Abono deuda: ${selectedDebtForPayment.name}`,
+      subcategoryName: '',
       categoryIcon: 'none',
       note: remainingDebt === 0 ? 'Deuda saldada' : 'Abono a deuda',
+      location: null,
       date: new Date().toISOString(),
     };
 
@@ -705,7 +792,7 @@ export default function App() {
     setAccToDelete(null);
   };
 
-  // --- Categorías ---
+  // --- Categorías y Subcategorías ---
   const handleAddCategory = (e) => {
     e.preventDefault();
     setCatFormAlert('');
@@ -717,10 +804,37 @@ export default function App() {
       id: Date.now().toString(),
       name: newCatName.trim(),
       icon: ALLOWED_ICON_IDS.has(newCatIcon) ? newCatIcon : 'none',
+      subcategories: [],
     };
     setData((prev) => ({ ...prev, categories: [...prev.categories, created] }));
     setNewCatName('');
     setNewCatIcon('none');
+  };
+
+  const handleAddSubcategory = (catId) => {
+    const raw = (subcatDraftByCatId[catId] || '').trim();
+    if (!raw) return;
+    setData((prev) => ({
+      ...prev,
+      categories: prev.categories.map((c) => {
+        if (c.id !== catId) return c;
+        const existing = Array.isArray(c.subcategories) ? c.subcategories : [];
+        if (existing.some((s) => s.toLowerCase() === raw.toLowerCase())) return c;
+        return { ...c, subcategories: [...existing, raw] };
+      }),
+    }));
+    setSubcatDraftByCatId((prev) => ({ ...prev, [catId]: '' }));
+  };
+
+  const handleRemoveSubcategory = (catId, subName) => {
+    setData((prev) => ({
+      ...prev,
+      categories: prev.categories.map((c) => {
+        if (c.id !== catId) return c;
+        const existing = Array.isArray(c.subcategories) ? c.subcategories : [];
+        return { ...c, subcategories: existing.filter((s) => s !== subName) };
+      }),
+    }));
   };
 
   const requestDeleteCategory = (cat) => {
@@ -922,8 +1036,10 @@ export default function App() {
       accountId: accObj.id,
       accountName: accObj.name,
       categoryName: `Suscripción: ${sub.name}`,
+      subcategoryName: '',
       categoryIcon: 'none',
       note: `Cobro día ${sub.billingDay}`,
+      location: null,
       date: new Date().toISOString(),
     };
 
@@ -1025,16 +1141,37 @@ export default function App() {
     setTxType('gasto');
     setTxAmount('');
     setTxAccount(data.accounts[0]?.id || '');
+    setTxCategoryId('');
     setTxCategoryName('');
     setTxCategoryIcon('none');
+    setTxSubcategoryName('');
+    setTxSaveLocation(false);
+    setTxLocationStatus('');
+    setTxSavingLocation(false);
     setTxNote('');
     setTxError('');
     setShowTxModal(true);
   };
 
-  const handleSaveTransaction = (e) => {
+  const selectedCategoryObject = useMemo(
+    () => data.categories.find((c) => c.id === txCategoryId) || null,
+    [data.categories, txCategoryId]
+  );
+
+  const handleToggleLocationOption = (wantLocation) => {
+    setTxSaveLocation(wantLocation);
+    if (wantLocation) {
+      setTxLocationStatus('Se pedirá permiso de ubicación al guardar el movimiento.');
+    } else {
+      setTxLocationStatus('');
+    }
+  };
+
+  const handleSaveTransaction = async (e) => {
     e.preventDefault();
+    if (txSavingLocation) return;
     setTxError('');
+
     const amount = parseMoneyInput(txAmount);
     if (!amount || amount <= 0) {
       setTxError('Escribe un valor mayor a 0.');
@@ -1053,6 +1190,20 @@ export default function App() {
       }
     }
 
+    let capturedLoc = null;
+    if (txSaveLocation) {
+      setTxSavingLocation(true);
+      setTxLocationStatus('Obteniendo ubicación...');
+      const geoRes = await captureCurrentLocation();
+      setTxSavingLocation(false);
+      if (geoRes.ok) {
+        capturedLoc = geoRes.location;
+      } else {
+        setCelebrationBanner(`${geoRes.error} El movimiento se guardó sin ubicación.`);
+        setTimeout(() => setCelebrationBanner(''), 4500);
+      }
+    }
+
     const newTx = {
       id: Date.now().toString(),
       type: txType,
@@ -1060,8 +1211,10 @@ export default function App() {
       accountId: accountObj?.id || '',
       accountName: accountObj?.name || 'Sin cuenta',
       categoryName: txCategoryName.trim() || 'General',
+      subcategoryName: txSubcategoryName.trim(),
       categoryIcon: ALLOWED_ICON_IDS.has(txCategoryIcon) ? txCategoryIcon : 'none',
       note: txNote.trim(),
+      location: capturedLoc,
       date: new Date().toISOString(),
     };
 
@@ -1093,6 +1246,9 @@ export default function App() {
       accounts: restoredAccounts,
       transactions: prev.transactions.filter((t) => t.id !== tx.id),
     }));
+    if (selectedTxDetail?.id === tx.id) {
+      setSelectedTxDetail(null);
+    }
     setTxToDelete(null);
   };
 
@@ -1171,9 +1327,13 @@ export default function App() {
       .map(
         (t) => `
         <tr>
-          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.categoryName}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.categoryName}${
+            t.subcategoryName ? ` (${t.subcategoryName})` : ''
+          }</td>
           <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${t.accountName}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${formatDateTimeLabel(t.date)}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;">${formatDateTimeLabel(t.date)}${
+            t.location?.label ? `<br/><small style="color:#475569;">📍 ${t.location.label}</small>` : ''
+          }</td>
           <td style="padding:6px 8px;border-bottom:1px solid #cbd5e1;text-align:right;font-weight:700;">${
             t.type === 'ingreso' ? '+' : t.type === 'gasto' ? '-' : '⇄ '
           }${formatMoneyByCurrency(t.amount, currency)}</td>
@@ -1248,7 +1408,7 @@ export default function App() {
                   <tr>
                     <th>Categoría</th>
                     <th>Cuenta</th>
-                    <th>Fecha y hora</th>
+                    <th>Fecha y ubicación</th>
                     <th style="text-align:right;">Valor</th>
                   </tr>
                 </thead>
@@ -1631,6 +1791,7 @@ export default function App() {
             return (
               <div
                 key={tx.id}
+                onClick={() => setSelectedTxDetail(tx)}
                 style={{
                   backgroundColor: theme.cardSolid,
                   border: `1px solid ${theme.border}`,
@@ -1640,6 +1801,7 @@ export default function App() {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: '10px',
+                  cursor: 'pointer',
                   transition: `transform 0.25s ${iosEase}, background-color 0.25s ${iosEase}`,
                 }}
               >
@@ -1648,8 +1810,32 @@ export default function App() {
                     <CategoryGlyph iconId={tx.categoryIcon} size={18} color={theme.textSecondary} />
                   ) : null}
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
-                      {tx.categoryName}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 600, color: theme.textPrimary }}>
+                        {tx.categoryName}
+                      </span>
+                      {tx.subcategoryName && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: '999px',
+                            backgroundColor: theme.accentBlueSoft,
+                            color: theme.accentBlueText,
+                          }}
+                        >
+                          {tx.subcategoryName}
+                        </span>
+                      )}
+                      {tx.location && (
+                        <span
+                          title="Con ubicación guardada"
+                          style={{ fontSize: '11px', color: theme.accentBlueText }}
+                        >
+                          📍
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
                       {tx.accountName}
@@ -1661,8 +1847,12 @@ export default function App() {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: '10px' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <span
+                    onClick={() => setSelectedTxDetail(tx)}
                     style={{
                       fontSize: '14px',
                       fontWeight: 700,
@@ -3675,7 +3865,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* 4. CATEGORÍAS */}
+            {/* 4. CATEGORÍAS Y SUBCATEGORÍAS OPCIONALES */}
             <section
               style={{
                 background: theme.card,
@@ -3700,7 +3890,7 @@ export default function App() {
                 }}
               >
                 <span style={{ fontSize: '14px', fontWeight: 700 }}>
-                  Categorías ({data.categories.length})
+                  Categorías y subcategorías ({data.categories.length})
                 </span>
                 <span style={{ fontSize: '12px', color: theme.textSecondary }}>
                   {openSections.categorias ? '▲' : '▼'}
@@ -3736,44 +3926,122 @@ export default function App() {
                           borderRadius: '10px',
                         }}
                       >
-                        Agrega una categoría. Elegir un ícono es opcional (puedes dejar <strong>✕</strong> sin ícono).
+                        Agrega una categoría. Luego podrás añadirle subcategorías opcionales (ej. Carrera, Recarga, Gasolina, Parqueo).
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                        {data.categories.map((cat) => (
-                          <div
-                            key={cat.id}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              backgroundColor: theme.cardSubtle,
-                              border: `1px solid ${theme.border}`,
-                              borderRadius: '999px',
-                              padding: '6px 12px',
-                              fontSize: '13px',
-                            }}
-                          >
-                            {cat.icon && cat.icon !== 'none' ? (
-                              <CategoryGlyph iconId={cat.icon} size={14} color={theme.textSecondary} />
-                            ) : null}
-                            <span>{cat.name}</span>
-                            <button
-                              type="button"
-                              onClick={() => requestDeleteCategory(cat)}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {data.categories.map((cat) => {
+                          const subcats = Array.isArray(cat.subcategories) ? cat.subcategories : [];
+                          return (
+                            <div
+                              key={cat.id}
                               style={{
-                                background: 'none',
-                                border: 'none',
-                                color: theme.textMuted,
-                                cursor: 'pointer',
-                                fontSize: '13px',
-                                padding: 0,
+                                backgroundColor: theme.cardSubtle,
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '12px',
+                                padding: '10px 12px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '8px',
                               }}
                             >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  {cat.icon && cat.icon !== 'none' ? (
+                                    <CategoryGlyph iconId={cat.icon} size={15} color={theme.textSecondary} />
+                                  ) : null}
+                                  <span style={{ fontSize: '14px', fontWeight: 700 }}>{cat.name}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => requestDeleteCategory(cat)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: theme.danger,
+                                    cursor: 'pointer',
+                                    fontSize: '13px',
+                                    padding: '2px 4px',
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+
+                              {subcats.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                  {subcats.map((sub) => (
+                                    <span
+                                      key={sub}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        padding: '4px 9px',
+                                        borderRadius: '999px',
+                                        backgroundColor: theme.accentBlueSoft,
+                                        color: theme.accentBlueText,
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      <span>{sub}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveSubcategory(cat.id, sub)}
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          color: theme.accentBlueText,
+                                          cursor: 'pointer',
+                                          fontSize: '11px',
+                                          padding: 0,
+                                        }}
+                                      >
+                                        ✕
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <input
+                                  type="text"
+                                  placeholder={`Nueva subcategoría en ${cat.name} (opcional)`}
+                                  value={subcatDraftByCatId[cat.id] || ''}
+                                  onChange={(e) =>
+                                    setSubcatDraftByCatId((prev) => ({ ...prev, [cat.id]: e.target.value }))
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleAddSubcategory(cat.id);
+                                    }
+                                  }}
+                                  style={{ ...baseInputStyle, fontSize: '12px', padding: '7px 9px' }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddSubcategory(cat.id)}
+                                  style={{
+                                    padding: '7px 10px',
+                                    borderRadius: '9px',
+                                    border: `1px solid ${theme.accentBlue}`,
+                                    backgroundColor: theme.accentBlueSoft,
+                                    color: theme.accentBlueText,
+                                    fontSize: '12px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  + Sub
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 
@@ -3797,7 +4065,10 @@ export default function App() {
                       </div>
                     )}
 
-                    <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                      <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                        Crear nueva categoría
+                      </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                         {ICON_OPTIONS.map((ic) => {
                           const active = newCatIcon === ic.id;
@@ -4121,7 +4392,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* 6. EDITAR SUSCRIPCIONES (CON ETIQUETAS CLARAS DE PARA QUÉ ES CADA CAMPO) */}
+            {/* 6. EDITAR SUSCRIPCIONES */}
             <section
               style={{
                 background: theme.card,
@@ -4249,7 +4520,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* 7. EDITAR DESEOS (CON ETIQUETAS CLARAS DE PARA QUÉ ES CADA CAMPO) */}
+            {/* 7. EDITAR DESEOS */}
             <section
               style={{
                 background: theme.card,
@@ -4364,6 +4635,178 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* ================= MODAL DETALLE DEL MOVIMIENTO AL TOCARLO ================= */}
+      {selectedTxDetail && (
+        <div
+          className="ios-backdrop-enter"
+          onClick={() => setSelectedTxDetail(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 62,
+            backgroundColor: 'rgba(0, 0, 0, 0.78)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            className="ios-screen-enter"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '370px',
+              backgroundColor: theme.cardSolid,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '22px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '16px', fontWeight: 800 }}>Detalle del movimiento</span>
+              <button
+                type="button"
+                onClick={() => setSelectedTxDetail(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div
+              style={{
+                backgroundColor: theme.cardSubtle,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '14px',
+                padding: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '7px',
+                fontSize: '13px',
+              }}
+            >
+              <div>
+                <span style={{ color: theme.textMuted }}>Valor: </span>
+                <strong
+                  style={{
+                    color:
+                      selectedTxDetail.type === 'transferencia'
+                        ? theme.accentBlueText
+                        : selectedTxDetail.type === 'ingreso'
+                        ? theme.success
+                        : theme.danger,
+                  }}
+                >
+                  {selectedTxDetail.type === 'ingreso' ? '+' : selectedTxDetail.type === 'gasto' ? '-' : '⇄ '}
+                  {renderMoney(selectedTxDetail.amount)}
+                </strong>
+              </div>
+              <div>
+                <span style={{ color: theme.textMuted }}>Categoría: </span>
+                <strong>{selectedTxDetail.categoryName}</strong>
+              </div>
+              {selectedTxDetail.subcategoryName && (
+                <div>
+                  <span style={{ color: theme.textMuted }}>Subcategoría: </span>
+                  <strong style={{ color: theme.accentBlueText }}>{selectedTxDetail.subcategoryName}</strong>
+                </div>
+              )}
+              <div>
+                <span style={{ color: theme.textMuted }}>Cuenta: </span>
+                <strong>{selectedTxDetail.accountName}</strong>
+              </div>
+              <div>
+                <span style={{ color: theme.textMuted }}>Fecha y hora: </span>
+                <strong>{formatDateTimeLabel(selectedTxDetail.date)}</strong>
+              </div>
+              {selectedTxDetail.note && (
+                <div>
+                  <span style={{ color: theme.textMuted }}>Nota: </span>
+                  <strong>{selectedTxDetail.note}</strong>
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                backgroundColor: theme.cardSubtle,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '14px',
+                padding: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary }}>
+                Ubicación del registro
+              </div>
+              {selectedTxDetail.location ? (
+                <>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: theme.textPrimary }}>
+                    📍 {selectedTxDetail.location.label}
+                  </div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                    Coordenadas: {selectedTxDetail.location.lat}, {selectedTxDetail.location.lng}
+                  </div>
+                  <a
+                    href={selectedTxDetail.location.mapUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-block',
+                      textAlign: 'center',
+                      padding: '9px 12px',
+                      borderRadius: '10px',
+                      backgroundColor: theme.accentBlueSoft,
+                      border: `1px solid ${theme.accentBlue}`,
+                      color: theme.accentBlueText,
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      textDecoration: 'none',
+                    }}
+                  >
+                    Ver en Google Maps ↗
+                  </a>
+                </>
+              ) : (
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>
+                  No se guardó ubicación en este movimiento.
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSelectedTxDetail(null)}
+              style={{
+                width: '100%',
+                padding: '11px',
+                borderRadius: '12px',
+                border: 'none',
+                backgroundColor: theme.accentBlue,
+                color: '#FFFFFF',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ================= MODAL TRANSFERENCIA ENTRE CUENTAS ================= */}
       {showTransferModal && (
@@ -4771,10 +5214,12 @@ export default function App() {
                     >
                       <div>
                         <div style={{ fontWeight: 700 }}>
-                          {tx.categoryName} ({tx.accountName})
+                          {tx.categoryName}
+                          {tx.subcategoryName ? ` (${tx.subcategoryName})` : ''} ({tx.accountName})
                         </div>
                         <div style={{ color: theme.textMuted }}>
                           {formatDateTimeLabel(tx.date)}{tx.note && tx.type !== 'transferencia' ? ` • ${tx.note}` : ''}
+                          {tx.location?.label ? ` • 📍 ${tx.location.label}` : ''}
                         </div>
                       </div>
                       <span
@@ -5511,7 +5956,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= MODAL REGISTRAR MOVIMIENTO ================= */}
+      {/* ================= MODAL REGISTRAR MOVIMIENTO (CON SUBCATEGORÍA Y UBICACIÓN OPCIONAL) ================= */}
       {showTxModal && (
         <div
           className="ios-backdrop-enter"
@@ -5649,14 +6094,23 @@ export default function App() {
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {data.categories.map((cat) => {
-                  const selected = txCategoryName === cat.name;
+                  const selected = txCategoryId === cat.id;
                   return (
                     <button
                       key={cat.id}
                       type="button"
                       onClick={() => {
-                        setTxCategoryName(selected ? '' : cat.name);
-                        setTxCategoryIcon(selected ? 'none' : cat.icon || 'none');
+                        if (selected) {
+                          setTxCategoryId('');
+                          setTxCategoryName('');
+                          setTxCategoryIcon('none');
+                          setTxSubcategoryName('');
+                        } else {
+                          setTxCategoryId(cat.id);
+                          setTxCategoryName(cat.name);
+                          setTxCategoryIcon(cat.icon || 'none');
+                          setTxSubcategoryName('');
+                        }
                       }}
                       style={{
                         display: 'inline-flex',
@@ -5702,6 +6156,97 @@ export default function App() {
               </div>
             </div>
 
+            {/* Subcategorías opcionales si la categoría elegida tiene subcategorías */}
+            {selectedCategoryObject &&
+              Array.isArray(selectedCategoryObject.subcategories) &&
+              selectedCategoryObject.subcategories.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
+                    Subcategoría de {selectedCategoryObject.name} (opcional)
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
+                    {selectedCategoryObject.subcategories.map((sub) => {
+                      const subSelected = txSubcategoryName === sub;
+                      return (
+                        <button
+                          key={sub}
+                          type="button"
+                          onClick={() => setTxSubcategoryName(subSelected ? '' : sub)}
+                          style={{
+                            padding: '6px 11px',
+                            borderRadius: '999px',
+                            border: subSelected ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                            backgroundColor: subSelected ? theme.accentBlueSoft : theme.inputBg,
+                            color: subSelected ? theme.accentBlueText : theme.textSecondary,
+                            fontSize: '12px',
+                            fontWeight: subSelected ? 700 : 500,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {sub}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+            {/* Opción de guardar ubicación: Sí / No */}
+            <div
+              style={{
+                backgroundColor: theme.cardSubtle,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '12px',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary }}>
+                  📍 ¿Guardar ubicación?
+                </span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleLocationOption(true)}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '9px',
+                      border: txSaveLocation ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                      backgroundColor: txSaveLocation ? theme.accentBlueSoft : theme.inputBg,
+                      color: txSaveLocation ? theme.accentBlueText : theme.textSecondary,
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Sí
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleLocationOption(false)}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '9px',
+                      border: !txSaveLocation ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                      backgroundColor: !txSaveLocation ? theme.accentBlueSoft : theme.inputBg,
+                      color: !txSaveLocation ? theme.accentBlueText : theme.textSecondary,
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+              {txLocationStatus && (
+                <div style={{ fontSize: '11px', color: theme.accentBlueText }}>{txLocationStatus}</div>
+              )}
+            </div>
+
             <input
               type="text"
               placeholder="Nota corta (Ej: Almuerzo)"
@@ -5712,6 +6257,7 @@ export default function App() {
 
             <button
               type="submit"
+              disabled={txSavingLocation}
               style={{
                 width: '100%',
                 padding: '14px',
@@ -5721,10 +6267,11 @@ export default function App() {
                 color: '#FFFFFF',
                 fontSize: '15px',
                 fontWeight: 700,
-                cursor: 'pointer',
+                cursor: txSavingLocation ? 'wait' : 'pointer',
+                opacity: txSavingLocation ? 0.75 : 1,
               }}
             >
-              Guardar movimiento
+              {txSavingLocation ? 'Guardando ubicación...' : 'Guardar movimiento'}
             </button>
           </form>
         </div>
@@ -5761,7 +6308,7 @@ export default function App() {
               ¿Seguro que quieres borrar "{catToDelete.name}"?
             </div>
             <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
-              Esta categoría se quitará de tu lista.
+              Esta categoría y sus subcategorías se quitarán de tu lista.
             </div>
 
             <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
