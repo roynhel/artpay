@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.22';
+const APP_VERSION = 'v1.0.23';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -224,6 +224,23 @@ const getNextMonthCycleDate = (billingDay, fromDate = new Date()) => {
   const nextMonth = fromDate.getMonth() + 1;
   const maxDayNext = new Date(year, nextMonth + 1, 0).getDate();
   return new Date(year, nextMonth, Math.min(safeDay, maxDayNext));
+};
+
+const addMonthsToDateKey = (dateKey, monthsToAdd = 1) => {
+  const [y, m, d] = String(dateKey || '').split('-').map(Number);
+  if (!y || !m || !d) return getLocalDayKey(new Date());
+  const targetMonthIndex = m - 1 + monthsToAdd;
+  const targetYear = y + Math.floor(targetMonthIndex / 12);
+  const normalizedMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const maxDay = new Date(targetYear, normalizedMonth + 1, 0).getDate();
+  const safeD = Math.min(d, maxDay);
+  return `${targetYear}-${String(normalizedMonth + 1).padStart(2, '0')}-${String(safeD).padStart(2, '0')}`;
+};
+
+const parseLocalDayKey = (dateKey) => {
+  const [y, m, d] = String(dateKey || '').split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
 };
 
 const normalizeStoredData = (parsed) => ({
@@ -535,7 +552,7 @@ export default function App() {
   // Suscripciones
   const [subName, setSubName] = useState('');
   const [subPrice, setSubPrice] = useState('');
-  const [subBillingDay, setSubBillingDay] = useState('12');
+  const [subNextDueDate, setSubNextDueDate] = useState(() => getLocalDayKey(new Date()));
   const [subAccountId, setSubAccountId] = useState('');
   const [subError, setSubError] = useState('');
 
@@ -1031,6 +1048,9 @@ export default function App() {
   // --- Suscripciones ---
   const currentMonthKey = currentDayKey.slice(0, 7);
 
+  const minSubCalendarDate = useMemo(() => addMonthsToDateKey(currentDayKey, -1), [currentDayKey]);
+  const maxSubCalendarDate = useMemo(() => addMonthsToDateKey(currentDayKey, 1), [currentDayKey]);
+
   const handleAddSubscription = (e) => {
     e.preventDefault();
     setSubError('');
@@ -1043,7 +1063,12 @@ export default function App() {
       setSubError('Escribe cuánto vale la suscripción.');
       return;
     }
-    const dayNum = Math.max(1, Math.min(31, Number(subBillingDay) || 1));
+    if (!subNextDueDate) {
+      setSubError('Selecciona la fecha de cobro en el calendario.');
+      return;
+    }
+    const parsedDue = parseLocalDayKey(subNextDueDate) || new Date();
+    const dayNum = parsedDue.getDate();
     const chosenAcc = data.accounts.find((a) => a.id === subAccountId) || data.accounts[0];
     if (!chosenAcc) {
       setSubError('Primero agrega una cuenta en Configuración para elegir de dónde saldrá la plata.');
@@ -1055,6 +1080,7 @@ export default function App() {
       name: subName.trim(),
       price,
       billingDay: dayNum,
+      nextDueDate: subNextDueDate,
       accountId: chosenAcc.id,
       accountName: chosenAcc.name,
       lastChargedMonth: '',
@@ -1066,7 +1092,7 @@ export default function App() {
     }));
     setSubName('');
     setSubPrice('');
-    setSubBillingDay('12');
+    setSubNextDueDate(getLocalDayKey(new Date()));
   };
 
   const handleUpdateSubscription = (id, patch) => {
@@ -1075,6 +1101,10 @@ export default function App() {
       subscriptions: prev.subscriptions.map((s) => {
         if (s.id !== id) return s;
         const next = { ...s, ...patch };
+        if (patch.nextDueDate) {
+          const dt = parseLocalDayKey(patch.nextDueDate);
+          if (dt) next.billingDay = dt.getDate();
+        }
         if (patch.accountId) {
           const accObj = prev.accounts.find((a) => a.id === patch.accountId);
           if (accObj) next.accountName = accObj.name;
@@ -1092,8 +1122,13 @@ export default function App() {
       name: `Suscripción: ${sub.name}`,
       amount: price,
     };
+    const baseDueKey = sub.nextDueDate || getLocalDayKey(getNextBillingDate(sub.billingDay, new Date()));
+    const nextCycleKey = addMonthsToDateKey(baseDueKey, 1);
+
     const updatedSubs = data.subscriptions.map((s) =>
-      s.id === sub.id ? { ...s, lastChargedMonth: currentMonthKey } : s
+      s.id === sub.id
+        ? { ...s, nextDueDate: nextCycleKey, lastChargedMonth: currentMonthKey }
+        : s
     );
 
     setData((prev) => ({
@@ -1138,13 +1173,18 @@ export default function App() {
       categoryName: `Suscripción: ${sub.name}`,
       subcategoryName: '',
       categoryIcon: 'none',
-      note: `Cobro día ${sub.billingDay}`,
+      note: sub.dateLabel ? `Cobro ${sub.dateLabel}` : `Cobro día ${sub.billingDay}`,
       location: null,
       date: new Date().toISOString(),
     };
 
+    const baseDueKey = sub.nextDueDate || getLocalDayKey(getNextBillingDate(sub.billingDay, new Date()));
+    const nextCycleKey = addMonthsToDateKey(baseDueKey, 1);
+
     const updatedSubs = data.subscriptions.map((s) =>
-      s.id === sub.id ? { ...s, lastChargedMonth: currentMonthKey } : s
+      s.id === sub.id
+        ? { ...s, nextDueDate: nextCycleKey, lastChargedMonth: currentMonthKey }
+        : s
     );
 
     setData((prev) => ({
@@ -1166,42 +1206,35 @@ export default function App() {
   };
 
   const computedSubscriptions = useMemo(() => {
-    const now = new Date();
-    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayMidnight = parseLocalDayKey(currentDayKey) || new Date();
     const msPerDay = 1000 * 60 * 60 * 24;
 
     return data.subscriptions
       .map((sub) => {
-        const chargedThisMonth = sub.lastChargedMonth === currentMonthKey;
-        const safeDay = Math.max(1, Math.min(31, Number(sub.billingDay) || 1));
-        const maxDayThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const dueThisMonthDate = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          Math.min(safeDay, maxDayThisMonth)
-        );
-
-        const targetDate = chargedThisMonth
-          ? getNextMonthCycleDate(sub.billingDay, now)
-          : dueThisMonthDate;
+        let targetDate = sub.nextDueDate ? parseLocalDayKey(sub.nextDueDate) : null;
+        if (!targetDate) {
+          const chargedThisMonth = sub.lastChargedMonth === currentMonthKey;
+          targetDate = chargedThisMonth
+            ? getNextMonthCycleDate(sub.billingDay, todayMidnight)
+            : getNextBillingDate(sub.billingDay, todayMidnight);
+        }
 
         const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
         const diffDays = Math.round((targetMidnight - todayMidnight) / msPerDay);
-        const isOverdue = !chargedThisMonth && diffDays < 0;
-        const isDueToday = !chargedThisMonth && diffDays === 0;
+        const isOverdue = diffDays < 0;
+        const isDueToday = diffDays === 0;
         const daysLeft = Math.max(0, diffDays);
+        const overdueDays = isOverdue ? Math.abs(diffDays) : 0;
 
         const linkedAcc = data.accounts.find((a) => a.id === sub.accountId);
         const accBal = linkedAcc ? Number(linkedAcc.balance) || 0 : 0;
 
-        let badgeText = chargedThisMonth
-          ? `Pagada • Próx. ${daysLeft}d`
-          : isOverdue
-          ? Math.abs(diffDays) === 1
-            ? 'Vencida hace 1 día'
-            : `Vencida hace ${Math.abs(diffDays)} días`
+        let badgeText = isOverdue
+          ? overdueDays === 1
+            ? '1 día de retraso'
+            : `${overdueDays} días de retraso`
           : isDueToday
-          ? 'Hoy es el cobro'
+          ? 'Hoy se cobra'
           : daysLeft === 1
           ? 'Falta 1 día'
           : `Faltan ${daysLeft} días`;
@@ -1224,7 +1257,7 @@ export default function App() {
 
         return {
           ...sub,
-          chargedThisMonth,
+          resolvedDueKey: getLocalDayKey(targetMidnight),
           daysLeft,
           diffDays,
           isOverdue,
@@ -1236,16 +1269,11 @@ export default function App() {
           accountBal: accBal,
         };
       })
-      .sort((a, b) => {
-        if (a.chargedThisMonth !== b.chargedThisMonth) {
-          return a.chargedThisMonth ? 1 : -1;
-        }
-        return a.diffDays - b.diffDays;
-      });
-  }, [data.subscriptions, data.accounts, currentMonthKey]);
+      .sort((a, b) => a.diffDays - b.diffDays);
+  }, [data.subscriptions, data.accounts, currentDayKey, currentMonthKey]);
 
   const subAlertStatus = useMemo(() => {
-    const activeAlerts = computedSubscriptions.filter((s) => !s.chargedThisMonth && (s.isDueToday || s.isOverdue));
+    const activeAlerts = computedSubscriptions.filter((s) => s.isDueToday || s.isOverdue);
     if (activeAlerts.length === 0) return null;
     const hasOverdue = activeAlerts.some((s) => s.isOverdue);
     return {
@@ -3264,17 +3292,20 @@ endstream`;
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.9fr) minmax(0, 1.3fr)', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1.15fr)', gap: '8px' }}>
                 <div>
                   <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
-                    Día del mes (1-31)
+                    Próxima fecha de cobro
                   </label>
                   <input
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={subBillingDay}
-                    onChange={(e) => setSubBillingDay(e.target.value)}
+                    type="date"
+                    min={minSubCalendarDate}
+                    max={maxSubCalendarDate}
+                    value={subNextDueDate}
+                    onChange={(e) => {
+                      setSubNextDueDate(e.target.value);
+                      if (subError) setSubError('');
+                    }}
                     style={baseInputStyle}
                   />
                 </div>
@@ -3348,8 +3379,6 @@ endstream`;
                           ? theme.danger
                           : sub.isDueToday
                           ? '#FACC15'
-                          : sub.chargedThisMonth
-                          ? theme.border
                           : theme.borderStrong
                       }`,
                       borderRadius: '15px',
@@ -3358,7 +3387,6 @@ endstream`;
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       gap: '10px',
-                      opacity: sub.chargedThisMonth ? 0.78 : 1,
                     }}
                   >
                     <div style={{ minWidth: 0 }}>
@@ -3378,7 +3406,7 @@ endstream`;
                         </span>
                       </div>
                       <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '3px' }}>
-                        {sub.isOverdue ? 'Debió cobrarse el' : 'Se cobra el'} <strong>{sub.dateLabel}</strong> • Sale de:{' '}
+                        {sub.isOverdue ? 'Debió cobrarse el' : 'Próximo cobro:'} <strong>{sub.dateLabel}</strong> • Sale de:{' '}
                         <strong>{sub.accountName}</strong>
                       </div>
                       <div style={{ fontSize: '13px', fontWeight: 700, color: theme.danger, marginTop: '2px' }}>
@@ -3387,24 +3415,22 @@ endstream`;
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                      {!sub.chargedThisMonth && (
-                        <button
-                          type="button"
-                          onClick={() => setSubToChargeConfirm(sub)}
-                          style={{
-                            padding: '7px 10px',
-                            borderRadius: '10px',
-                            border: 'none',
-                            backgroundColor: theme.accentBlue,
-                            color: '#FFFFFF',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Cobrar
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSubToChargeConfirm(sub)}
+                        style={{
+                          padding: '7px 10px',
+                          borderRadius: '10px',
+                          border: 'none',
+                          backgroundColor: theme.accentBlue,
+                          color: '#FFFFFF',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Cobrar
+                      </button>
                       <button
                         type="button"
                         onClick={() => setSubToDelete(sub)}
@@ -4838,19 +4864,22 @@ endstream`;
                             </div>
                           </div>
 
-                          <div style={{ display: 'grid', gridTemplateColumns: '0.85fr 1.35fr', gap: '8px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 1.15fr', gap: '8px' }}>
                             <div>
                               <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
-                                Día de cobro (1-31)
+                                Próxima fecha de cobro
                               </label>
                               <input
-                                type="number"
-                                min="1"
-                                max="31"
-                                value={sub.billingDay}
+                                type="date"
+                                min={minSubCalendarDate}
+                                max={maxSubCalendarDate}
+                                value={
+                                  sub.nextDueDate ||
+                                  getLocalDayKey(getNextBillingDate(sub.billingDay, new Date()))
+                                }
                                 onChange={(e) =>
                                   handleUpdateSubscription(sub.id, {
-                                    billingDay: Math.max(1, Math.min(31, Number(e.target.value) || 1)),
+                                    nextDueDate: e.target.value,
                                   })
                                 }
                                 style={baseInputStyle}
@@ -6257,44 +6286,36 @@ endstream`;
         </div>
       )}
 
-      {/* ================= MODAL FLOTANTE CENTRADO: REGISTRAR MOVIMIENTO ================= */}
+      {/* ================= MODAL REGISTRAR MOVIMIENTO (CON SUBCATEGORÍA Y UBICACIÓN OPCIONAL) ================= */}
       {showTxModal && (
         <div
           className="ios-backdrop-enter"
-          onClick={() => {
-            if (!txSavingLocation) setShowTxModal(false);
-          }}
           style={{
             position: 'fixed',
             inset: 0,
-            zIndex: 60,
-            backgroundColor: 'rgba(0, 0, 0, 0.68)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
+            zIndex: 50,
+            backgroundColor: 'rgba(0, 0, 0, 0.78)',
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-end',
             justifyContent: 'center',
-            padding: '16px',
           }}
         >
           <form
-            className="ios-screen-enter"
-            onClick={(e) => e.stopPropagation()}
+            className="ios-sheet-enter"
             onSubmit={handleSaveTransaction}
             style={{
               width: '100%',
-              maxWidth: '420px',
+              maxWidth: '480px',
               backgroundColor: theme.cardSolid,
-              border: `1px solid ${theme.borderStrong}`,
-              borderRadius: '24px',
+              borderTop: `1px solid ${theme.borderStrong}`,
+              borderRadius: '24px 24px 0 0',
               padding: '20px',
               display: 'flex',
               flexDirection: 'column',
               gap: '12px',
               boxSizing: 'border-box',
-              maxHeight: '86dvh',
+              maxHeight: '90dvh',
               overflowY: 'auto',
-              boxShadow: '0 24px 54px rgba(0, 0, 0, 0.72)',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
