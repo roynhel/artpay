@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.23';
+const APP_VERSION = 'v1.0.24';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -537,6 +537,7 @@ export default function App() {
 
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtAmount, setNewDebtAmount] = useState('');
+  const [newDebtDueDate, setNewDebtDueDate] = useState('');
   const [debtFormAlert, setDebtFormAlert] = useState('');
 
   const [configNotice, setConfigNotice] = useState('');
@@ -992,10 +993,19 @@ export default function App() {
       id: Date.now().toString(),
       name: newDebtName.trim(),
       amount,
+      dueDate: newDebtDueDate ? newDebtDueDate.trim() : '',
     };
     setData((prev) => ({ ...prev, debts: [...prev.debts, created] }));
     setNewDebtName('');
     setNewDebtAmount('');
+    setNewDebtDueDate('');
+  };
+
+  const handleUpdateDebtDueDate = (id, dueDateVal) => {
+    setData((prev) => ({
+      ...prev,
+      debts: prev.debts.map((d) => (d.id === id ? { ...d, dueDate: dueDateVal } : d)),
+    }));
   };
 
   const handleUpdateDebtName = (id, nameVal) => {
@@ -3292,7 +3302,7 @@ endstream`;
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1.15fr)', gap: '8px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div>
                   <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
                     Próxima fecha de cobro
@@ -3306,7 +3316,7 @@ endstream`;
                       setSubNextDueDate(e.target.value);
                       if (subError) setSubError('');
                     }}
-                    style={baseInputStyle}
+                    style={{ ...baseInputStyle, width: '100%' }}
                   />
                 </div>
 
@@ -3320,7 +3330,7 @@ endstream`;
                       setSubAccountId(e.target.value);
                       if (subError) setSubError('');
                     }}
-                    style={baseInputStyle}
+                    style={{ ...baseInputStyle, width: '100%' }}
                   >
                     {data.accounts.length === 0 ? (
                       <option value="">Sin cuentas</option>
@@ -4595,117 +4605,149 @@ endstream`;
                                 borderRadius: '12px',
                                 padding: '10px',
                                 display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: '6px',
+                                flexDirection: 'column',
+                                gap: '8px',
                               }}
                             >
-                              <span
-                                style={{
-                                  width: '20px',
-                                  height: '20px',
-                                  borderRadius: '50%',
-                                  backgroundColor: dStyle.badgeBg,
-                                  color: dStyle.badgeColor,
-                                  fontSize: '11px',
-                                  fontWeight: 800,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  flexShrink: 0,
-                                }}
-                              >
-                                {idx + 1}
-                              </span>
-
-                              <input
-                                type="text"
-                                value={debt.name}
-                                onChange={(e) => handleUpdateDebtName(debt.id, e.target.value)}
-                                style={{
-                                  flex: 1,
-                                  minWidth: 0,
-                                  backgroundColor: theme.inputBg,
-                                  border: `1px solid ${theme.border}`,
-                                  borderRadius: '8px',
-                                  padding: '6px 8px',
-                                  color: theme.textPrimary,
-                                  fontSize: '12px',
-                                  fontWeight: 600,
-                                }}
-                              />
-
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                value={Number(debt.amount).toLocaleString('es-CO')}
-                                onChange={(e) => handleUpdateDebtAmount(debt.id, e.target.value)}
-                                style={{
-                                  width: '86px',
-                                  minWidth: 0,
-                                  boxSizing: 'border-box',
-                                  textAlign: 'right',
-                                  backgroundColor: theme.inputBg,
-                                  border: `1px solid ${theme.border}`,
-                                  borderRadius: '8px',
-                                  padding: '6px 7px',
-                                  color: dStyle.amountColor,
-                                  fontSize: '12px',
-                                  fontWeight: 700,
-                                }}
-                              />
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-                                <button
-                                  type="button"
-                                  disabled={idx === 0}
-                                  onClick={() => reorderDebts(idx, idx - 1)}
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                                <span
                                   style={{
-                                    width: '24px',
-                                    height: '24px',
-                                    borderRadius: '6px',
-                                    border: `1px solid ${theme.border}`,
-                                    backgroundColor: theme.inputBg,
-                                    color: theme.textPrimary,
-                                    opacity: idx === 0 ? 0.35 : 1,
+                                    width: '20px',
+                                    height: '20px',
+                                    borderRadius: '50%',
+                                    backgroundColor: dStyle.badgeBg,
+                                    color: dStyle.badgeColor,
                                     fontSize: '11px',
-                                    cursor: idx === 0 ? 'default' : 'pointer',
+                                    fontWeight: 800,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    flexShrink: 0,
                                   }}
                                 >
-                                  ↑
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={idx === data.debts.length - 1}
-                                  onClick={() => reorderDebts(idx, idx + 1)}
+                                  {idx + 1}
+                                </span>
+
+                                <input
+                                  type="text"
+                                  value={debt.name}
+                                  onChange={(e) => handleUpdateDebtName(debt.id, e.target.value)}
                                   style={{
-                                    width: '24px',
-                                    height: '24px',
-                                    borderRadius: '6px',
-                                    border: `1px solid ${theme.border}`,
+                                    flex: 1,
+                                    minWidth: 0,
                                     backgroundColor: theme.inputBg,
+                                    border: `1px solid ${theme.border}`,
+                                    borderRadius: '8px',
+                                    padding: '6px 8px',
                                     color: theme.textPrimary,
-                                    opacity: idx === data.debts.length - 1 ? 0.35 : 1,
-                                    fontSize: '11px',
-                                    cursor: idx === data.debts.length - 1 ? 'default' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
                                   }}
-                                >
-                                  ↓
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => requestDeleteDebt(debt)}
+                                />
+
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={Number(debt.amount).toLocaleString('es-CO')}
+                                  onChange={(e) => handleUpdateDebtAmount(debt.id, e.target.value)}
                                   style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    color: theme.textMuted,
-                                    cursor: 'pointer',
-                                    fontSize: '13px',
-                                    padding: '2px 4px',
+                                    width: '86px',
+                                    minWidth: 0,
+                                    boxSizing: 'border-box',
+                                    textAlign: 'right',
+                                    backgroundColor: theme.inputBg,
+                                    border: `1px solid ${theme.border}`,
+                                    borderRadius: '8px',
+                                    padding: '6px 7px',
+                                    color: dStyle.amountColor,
+                                    fontSize: '12px',
+                                    fontWeight: 700,
                                   }}
-                                >
-                                  ✕
-                                </button>
+                                />
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                                  <button
+                                    type="button"
+                                    disabled={idx === 0}
+                                    onClick={() => reorderDebts(idx, idx - 1)}
+                                    style={{
+                                      width: '24px',
+                                      height: '24px',
+                                      borderRadius: '6px',
+                                      border: `1px solid ${theme.border}`,
+                                      backgroundColor: theme.inputBg,
+                                      color: theme.textPrimary,
+                                      opacity: idx === 0 ? 0.35 : 1,
+                                      fontSize: '11px',
+                                      cursor: idx === 0 ? 'default' : 'pointer',
+                                    }}
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={idx === data.debts.length - 1}
+                                    onClick={() => reorderDebts(idx, idx + 1)}
+                                    style={{
+                                      width: '24px',
+                                      height: '24px',
+                                      borderRadius: '6px',
+                                      border: `1px solid ${theme.border}`,
+                                      backgroundColor: theme.inputBg,
+                                      color: theme.textPrimary,
+                                      opacity: idx === data.debts.length - 1 ? 0.35 : 1,
+                                      fontSize: '11px',
+                                      cursor: idx === data.debts.length - 1 ? 'default' : 'pointer',
+                                    }}
+                                  >
+                                    ↓
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => requestDeleteDebt(debt)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: theme.textMuted,
+                                      cursor: 'pointer',
+                                      fontSize: '13px',
+                                      padding: '2px 4px',
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                                  Fecha límite (opcional):
+                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <input
+                                    type="date"
+                                    value={debt.dueDate || ''}
+                                    onChange={(e) => handleUpdateDebtDueDate(debt.id, e.target.value)}
+                                    style={{ ...baseInputStyle, width: 'auto', padding: '5px 8px', fontSize: '11px' }}
+                                  />
+                                  {debt.dueDate && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateDebtDueDate(debt.id, '')}
+                                      style={{
+                                        background: 'none',
+                                        border: `1px solid ${theme.border}`,
+                                        borderRadius: '7px',
+                                        color: theme.textMuted,
+                                        fontSize: '10px',
+                                        padding: '4px 6px',
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      Sin fecha
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           );
@@ -4755,6 +4797,35 @@ endstream`;
                             if (debtFormAlert) setDebtFormAlert('');
                           }}
                           style={baseInputStyle}
+                        />
+                      </div>
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <label style={{ fontSize: '11px', color: theme.textSecondary }}>
+                            Fecha límite de pago (opcional — si no pones, se paga cuando quieras)
+                          </label>
+                          {newDebtDueDate && (
+                            <button
+                              type="button"
+                              onClick={() => setNewDebtDueDate('')}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: theme.accentBlueText,
+                                fontSize: '11px',
+                                cursor: 'pointer',
+                                padding: 0,
+                              }}
+                            >
+                              Quitar fecha
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="date"
+                          value={newDebtDueDate}
+                          onChange={(e) => setNewDebtDueDate(e.target.value)}
+                          style={{ ...baseInputStyle, width: '100%' }}
                         />
                       </div>
                       <button
@@ -4864,7 +4935,7 @@ endstream`;
                             </div>
                           </div>
 
-                          <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 1.15fr', gap: '8px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <div>
                               <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
                                 Próxima fecha de cobro
@@ -4882,7 +4953,7 @@ endstream`;
                                     nextDueDate: e.target.value,
                                   })
                                 }
-                                style={baseInputStyle}
+                                style={{ ...baseInputStyle, width: '100%' }}
                               />
                             </div>
                             <div>
@@ -4892,7 +4963,7 @@ endstream`;
                               <select
                                 value={sub.accountId}
                                 onChange={(e) => handleUpdateSubscription(sub.id, { accountId: e.target.value })}
-                                style={baseInputStyle}
+                                style={{ ...baseInputStyle, width: '100%' }}
                               >
                                 {data.accounts.map((acc) => (
                                   <option key={acc.id} value={acc.id}>
@@ -5692,9 +5763,16 @@ endstream`;
                         >
                           {idx + 1}
                         </span>
-                        <span style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
-                          {debt.name}
-                        </span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
+                            {debt.name}
+                          </div>
+                          {debt.dueDate && (
+                            <div style={{ fontSize: '11px', color: theme.warning, fontWeight: 600, marginTop: '2px' }}>
+                              Hasta el {formatDayHeading(debt.dueDate)}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div
