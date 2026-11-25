@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.25';
+const APP_VERSION = 'v1.0.26';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -620,6 +620,118 @@ export default function App() {
     return Date.now() - refTime >= sevenDaysMs;
   }, [data.lastBackupAt, data.firstOpenedAt]);
 
+  const debtUrgencyInfo = useMemo(() => {
+    const todayMidnight = parseLocalDayKey(currentDayKey) || new Date();
+    const msPerDay = 1000 * 60 * 60 * 24;
+
+    const evaluated = data.debts
+      .filter((d) => Boolean(d.dueDate))
+      .map((d) => {
+        const dueDt = parseLocalDayKey(d.dueDate);
+        if (!dueDt) return null;
+        const dueMidnight = new Date(dueDt.getFullYear(), dueDt.getMonth(), dueDt.getDate());
+        const diffDays = Math.round((dueMidnight - todayMidnight) / msPerDay);
+        const formattedDueDate = formatDayHeading(d.dueDate);
+
+        if (diffDays < 0) {
+          return {
+            id: d.id,
+            name: d.name,
+            dueDate: d.dueDate,
+            formattedDueDate,
+            diffDays,
+            level: 'overdue',
+            color: '#EF4444',
+            bg: 'rgba(239, 68, 68, 0.16)',
+            textColor: '#FFFFFF',
+            badgeLabel: `Vencida (${formattedDueDate})`,
+            message: `Pagar esta deuda lo más pronto posible — venció el ${formattedDueDate}.`,
+          };
+        }
+        if (diffDays === 0) {
+          return {
+            id: d.id,
+            name: d.name,
+            dueDate: d.dueDate,
+            formattedDueDate,
+            diffDays,
+            level: 'today',
+            color: '#EF4444',
+            bg: 'rgba(239, 68, 68, 0.16)',
+            textColor: '#FFFFFF',
+            badgeLabel: 'Hoy',
+            message: `Tienes que pagar esta deuda hoy (${formattedDueDate}).`,
+          };
+        }
+        if (diffDays === 1) {
+          return {
+            id: d.id,
+            name: d.name,
+            dueDate: d.dueDate,
+            formattedDueDate,
+            diffDays,
+            level: 'oneDay',
+            color: '#F97316',
+            bg: 'rgba(249, 115, 22, 0.16)',
+            textColor: '#FFFFFF',
+            badgeLabel: 'Falta 1 día',
+            message: `Falta 1 día para la fecha límite (${formattedDueDate}).`,
+          };
+        }
+        if (diffDays === 2) {
+          return {
+            id: d.id,
+            name: d.name,
+            dueDate: d.dueDate,
+            formattedDueDate,
+            diffDays,
+            level: 'twoDays',
+            color: '#FACC15',
+            bg: 'rgba(234, 179, 8, 0.18)',
+            textColor: '#090B0E',
+            badgeLabel: 'Faltan 2 días',
+            message: `Faltan 2 días para la fecha límite (${formattedDueDate}).`,
+          };
+        }
+        return {
+          id: d.id,
+          name: d.name,
+          dueDate: d.dueDate,
+          formattedDueDate,
+          diffDays,
+          level: 'upcoming',
+          color: null,
+          bg: null,
+          textColor: null,
+          badgeLabel: `Hasta el ${formattedDueDate}`,
+          message: `Fecha límite: ${formattedDueDate}.`,
+        };
+      })
+      .filter(Boolean);
+
+    const byId = {};
+    evaluated.forEach((item) => {
+      byId[item.id] = item;
+    });
+
+    const notifying = evaluated.filter((item) => item.level !== 'upcoming');
+    if (notifying.length === 0) {
+      return { byId, badge: null, alerts: [] };
+    }
+
+    // Priority: overdue / today (red) > 1 day (orange) > 2 days (yellow)
+    const hasRed = notifying.some((i) => i.level === 'overdue' || i.level === 'today');
+    const hasOrange = notifying.some((i) => i.level === 'oneDay');
+
+    const badge = {
+      count: notifying.length,
+      color: hasRed ? '#EF4444' : hasOrange ? '#F97316' : '#FACC15',
+      textColor: !hasRed && !hasOrange ? '#090B0E' : '#FFFFFF',
+    };
+
+    return { byId, badge, alerts: notifying };
+  }, [data.debts, currentDayKey]);
+
   const { totalAvailable, totalDebts, todayIncome, todayExpense } = useMemo(() => {
     const avail = data.accounts.reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
     const debts = data.debts.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
@@ -990,11 +1102,16 @@ export default function App() {
       setDebtFormAlert('Debes escribir el valor de la deuda para poder agregarla.');
       return;
     }
+    const cleanDue = newDebtDueDate ? newDebtDueDate.trim() : '';
+    if (cleanDue && cleanDue < currentDayKey) {
+      setDebtFormAlert('La fecha límite no puede ser una fecha que ya pasó; elige hoy o una fecha hacia adelante.');
+      return;
+    }
     const created = {
       id: Date.now().toString(),
       name: newDebtName.trim(),
       amount,
-      dueDate: newDebtDueDate ? newDebtDueDate.trim() : '',
+      dueDate: cleanDue,
     };
     setData((prev) => ({ ...prev, debts: [...prev.debts, created] }));
     setNewDebtName('');
@@ -1003,9 +1120,15 @@ export default function App() {
   };
 
   const handleUpdateDebtDueDate = (id, dueDateVal) => {
+    const cleanVal = String(dueDateVal || '').trim();
+    if (cleanVal && cleanVal < currentDayKey) {
+      setDebtFormAlert('No puedes poner una fecha que ya pasó; elige hoy o una fecha hacia adelante.');
+      return;
+    }
+    setDebtFormAlert('');
     setData((prev) => ({
       ...prev,
-      debts: prev.debts.map((d) => (d.id === id ? { ...d, dueDate: dueDateVal } : d)),
+      debts: prev.debts.map((d) => (d.id === id ? { ...d, dueDate: cleanVal } : d)),
     }));
   };
 
@@ -2779,7 +2902,9 @@ endstream`;
               onClick={() => setShowDebtSectionModal(true)}
               style={{
                 background: theme.card,
-                border: `1px solid ${theme.border}`,
+                border: debtUrgencyInfo.badge
+                  ? `1.5px solid ${debtUrgencyInfo.badge.color}`
+                  : `1px solid ${theme.border}`,
                 borderRadius: '18px',
                 padding: '16px 18px',
                 display: 'flex',
@@ -2791,6 +2916,9 @@ endstream`;
               <div>
                 <div
                   style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '7px',
                     fontSize: '11px',
                     fontWeight: 700,
                     letterSpacing: '0.7px',
@@ -2798,7 +2926,27 @@ endstream`;
                     marginBottom: '4px',
                   }}
                 >
-                  DEUDAS
+                  <span>DEUDAS</span>
+                  {debtUrgencyInfo.badge && (
+                    <span
+                      style={{
+                        minWidth: '18px',
+                        height: '18px',
+                        padding: '0 6px',
+                        borderRadius: '999px',
+                        backgroundColor: debtUrgencyInfo.badge.color,
+                        color: debtUrgencyInfo.badge.textColor,
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        letterSpacing: 0,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {debtUrgencyInfo.badge.count}
+                    </span>
+                  )}
                 </div>
                 <div>
                   {renderBigCurrencyAmount(
@@ -3145,6 +3293,30 @@ endstream`;
               </div>
             </section>
 
+            {data.transactions.length === 0 && (
+              <section
+                className="ios-screen-enter"
+                style={{
+                  background: theme.card,
+                  border: `1.5px solid ${theme.accentBlue}`,
+                  borderRadius: '18px',
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                }}
+              >
+                <div style={{ fontSize: '14px', fontWeight: 800, color: theme.accentBlueText }}>
+                  ¿Qué verás aquí cuando registres movimientos?
+                </div>
+                <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.45 }}>
+                  • <strong>Ingresos vs Gastos:</strong> Comparará cuánto entró y cuánto salió en el Día, Semana o Mes.<br />
+                  • <strong>Gasto / Ingresos por categoría:</strong> Te mostrará en qué categorías gastas o recibes más plata, ordenadas de mayor a menor.<br />
+                  • Cuando agregues tus primeros movimientos en Inicio, todos estos gráficos y listas se llenarán solos.
+                </div>
+              </section>
+            )}
+
             {/* Debajo: ordenado dinámicamente poniendo arriba el que mayor total tiene */}
             {categoryBreakdownBlocks.map((block) => {
               const isOpen = !!openStats[block.key];
@@ -3378,16 +3550,19 @@ endstream`;
             {computedSubscriptions.length === 0 ? (
               <div
                 style={{
-                  backgroundColor: theme.cardSolid,
-                  border: `1px solid ${theme.border}`,
+                  background: theme.card,
+                  border: `1.5px solid ${theme.accentBlue}`,
                   borderRadius: '16px',
-                  padding: '22px',
-                  textAlign: 'center',
-                  color: theme.textMuted,
-                  fontSize: '13px',
+                  padding: '16px',
+                  color: theme.textSecondary,
+                  fontSize: '12px',
+                  lineHeight: 1.45,
                 }}
               >
-                No tienes suscripciones registradas todavía.
+                <div style={{ fontSize: '14px', fontWeight: 800, color: theme.accentBlueText, marginBottom: '6px' }}>
+                  ¿Para qué sirve Suscripciones?
+                </div>
+                Aquí podrás apartar y controlar todas las suscripciones mensuales que tienes (Netflix, Spotify, internet, etc.). Elige el valor, la próxima fecha de cobro y de qué cuenta saldrá la plata; cuando llegue el día o lo cobres, avanzará automáticamente al siguiente mes.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -3589,16 +3764,19 @@ endstream`;
             {data.wishes.length === 0 ? (
               <div
                 style={{
-                  backgroundColor: theme.cardSolid,
-                  border: `1px solid ${theme.border}`,
+                  background: theme.card,
+                  border: `1.5px solid ${theme.accentBlue}`,
                   borderRadius: '16px',
-                  padding: '22px',
-                  textAlign: 'center',
-                  color: theme.textMuted,
-                  fontSize: '13px',
+                  padding: '16px',
+                  color: theme.textSecondary,
+                  fontSize: '12px',
+                  lineHeight: 1.45,
                 }}
               >
-                Agrega un deseo y su valor para organizar tus prioridades.
+                <div style={{ fontSize: '14px', fontWeight: 800, color: theme.accentBlueText, marginBottom: '6px' }}>
+                  ¿Cómo usar tu Lista de Deseos?
+                </div>
+                Aquí podrás ordenar todos los deseos o compras que quieras hacer en un futuro según tu prioridad (1, 2, 3...) y ver cuánto suman en total para planificarlos mejor.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -4761,6 +4939,7 @@ endstream`;
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                   <input
                                     type="date"
+                                    min={currentDayKey}
                                     value={debt.dueDate || ''}
                                     onChange={(e) => handleUpdateDebtDueDate(debt.id, e.target.value)}
                                     style={{ ...baseInputStyle, width: 'auto', padding: '5px 8px', fontSize: '11px' }}
@@ -4861,8 +5040,12 @@ endstream`;
                         </div>
                         <input
                           type="date"
+                          min={currentDayKey}
                           value={newDebtDueDate}
-                          onChange={(e) => setNewDebtDueDate(e.target.value)}
+                          onChange={(e) => {
+                            setNewDebtDueDate(e.target.value);
+                            if (debtFormAlert) setDebtFormAlert('');
+                          }}
                           style={{ ...baseInputStyle, width: '100%' }}
                         />
                       </div>
@@ -5843,12 +6026,37 @@ endstream`;
                           {idx + 1}
                         </span>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
-                            {debt.name}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
+                              {debt.name}
+                            </span>
+                            {debtUrgencyInfo.byId[debt.id] && debtUrgencyInfo.byId[debt.id].color && (
+                              <span
+                                style={{
+                                  fontSize: '10px',
+                                  fontWeight: 800,
+                                  padding: '2px 7px',
+                                  borderRadius: '999px',
+                                  backgroundColor: debtUrgencyInfo.byId[debt.id].color,
+                                  color: debtUrgencyInfo.byId[debt.id].textColor,
+                                }}
+                              >
+                                {debtUrgencyInfo.byId[debt.id].badgeLabel}
+                              </span>
+                            )}
                           </div>
                           {debt.dueDate && (
-                            <div style={{ fontSize: '11px', color: theme.warning, fontWeight: 600, marginTop: '2px' }}>
-                              Hasta el {formatDayHeading(debt.dueDate)}
+                            <div
+                              style={{
+                                fontSize: '11px',
+                                color: debtUrgencyInfo.byId[debt.id]?.color || theme.warning,
+                                fontWeight: 700,
+                                marginTop: '2px',
+                              }}
+                            >
+                              {debtUrgencyInfo.byId[debt.id] && debtUrgencyInfo.byId[debt.id].level !== 'upcoming'
+                                ? debtUrgencyInfo.byId[debt.id].message
+                                : `Hasta el ${formatDayHeading(debt.dueDate)}`}
                             </div>
                           )}
                         </div>
