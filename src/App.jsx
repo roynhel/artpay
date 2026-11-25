@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.24';
+const APP_VERSION = 'v1.0.25';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -549,6 +549,7 @@ export default function App() {
   const [showReenableAccPrompt, setShowReenableAccPrompt] = useState(false);
   const [debtToDelete, setDebtToDelete] = useState(null);
   const [showReenableDebtPrompt, setShowReenableDebtPrompt] = useState(false);
+  const [resetConfirmStep, setResetConfirmStep] = useState(0); // 0 = cerrado, 1 = primer aviso, 2 = confirmación final
 
   // Suscripciones
   const [subName, setSubName] = useState('');
@@ -3302,8 +3303,8 @@ endstream`;
                 />
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '10px', alignItems: 'end' }}>
+                <div style={{ minWidth: 0 }}>
                   <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
                     Próxima fecha de cobro
                   </label>
@@ -3316,11 +3317,17 @@ endstream`;
                       setSubNextDueDate(e.target.value);
                       if (subError) setSubError('');
                     }}
-                    style={{ ...baseInputStyle, width: '100%' }}
+                    style={{
+                      ...baseInputStyle,
+                      padding: '9px 8px',
+                      fontSize: '12px',
+                      WebkitAppearance: 'none',
+                      appearance: 'none',
+                    }}
                   />
                 </div>
 
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '4px' }}>
                     ¿De qué dinero saldrá?
                   </label>
@@ -3330,7 +3337,12 @@ endstream`;
                       setSubAccountId(e.target.value);
                       if (subError) setSubError('');
                     }}
-                    style={{ ...baseInputStyle, width: '100%' }}
+                    style={{
+                      ...baseInputStyle,
+                      padding: '9px 8px',
+                      fontSize: '12px',
+                      textOverflow: 'ellipsis',
+                    }}
                   >
                     {data.accounts.length === 0 ? (
                       <option value="">Sin cuentas</option>
@@ -3818,6 +3830,11 @@ endstream`;
               <div className={`smooth-collapse ${openSections.perfil ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      {!data.userName && !data.lastBackupAt
+                        ? 'Aquí personalizas tu nombre, la moneda principal y guardas copias de respaldo en archivo JSON para no perder tus datos.'
+                        : 'Edita tu nombre, cambia la moneda o exporta/importa un respaldo actualizado de tu información.'}
+                    </div>
                     <div>
                       <label style={{ fontSize: '12px', color: theme.textSecondary, display: 'block', marginBottom: '6px' }}>
                         Tu nombre
@@ -3931,6 +3948,9 @@ endstream`;
 
               <div className={`smooth-collapse ${openSections.apariencia ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
+                  <div style={{ padding: '0 16px 8px', fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                    Elige si prefieres la aplicación en fondo negro, claro o sincronizada con el tema de tu teléfono.
+                  </div>
                   <div style={{ padding: '0 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                     {[
                       { id: 'dark', label: 'Negro' },
@@ -4015,6 +4035,11 @@ endstream`;
                       </div>
                     )}
 
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      {data.accounts.length === 0
+                        ? 'Aquí creas las cuentas o bolsillos donde guardas tu plata (como Efectivo, Nequi o Bancolombia) para llevar su saldo real.'
+                        : 'Aquí puedes ajustar directamente el saldo de tus cuentas, agregar nuevas o configurar precios rápidos.'}
+                    </div>
                     {data.accounts.length === 0 ? (
                       <div
                         style={{
@@ -4025,7 +4050,7 @@ endstream`;
                           borderRadius: '10px',
                         }}
                       >
-                        Agrega una cuenta abajo (Ej: <strong>Nequi</strong> y <strong>50.000</strong>).
+                        Escribe el nombre y el saldo inicial abajo para crear tu primera cuenta (Ej: <strong>Nequi</strong> y <strong>50.000</strong>).
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -4313,6 +4338,11 @@ endstream`;
                       </div>
                     )}
 
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      {data.categories.length === 0
+                        ? 'Las categorías sirven para clasificar tus ingresos y gastos (ej. Comida, Carro, Trabajo) y ver en qué se va tu plata en Estadísticas.'
+                        : 'Administra tus categorías y añade subcategorías opcionales dentro de cada una para detallar mejor tus movimientos.'}
+                    </div>
                     {data.categories.length === 0 ? (
                       <div
                         style={{
@@ -4323,7 +4353,7 @@ endstream`;
                           borderRadius: '10px',
                         }}
                       >
-                        Agrega una categoría. Luego podrás añadirle subcategorías opcionales (ej. Carrera, Recarga, Gasolina, Parqueo).
+                        Crea tu primera categoría abajo (el ícono es opcional) y luego agrégale subcategorías si quieres.
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -4579,6 +4609,11 @@ endstream`;
                       </div>
                     )}
 
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      {data.debts.length === 0
+                        ? 'Aquí registras lo que debes (préstamos, tarjetas o compromisos). Puedes ponerles fecha límite o dejarlas abiertas para abonar cuando quieras desde Inicio.'
+                        : 'Edita el nombre, el monto o la fecha límite de tus deudas activas, ordénalas por prioridad o agrega una nueva deuda abajo.'}
+                    </div>
                     {data.debts.length === 0 ? (
                       <div
                         style={{
@@ -4589,7 +4624,7 @@ endstream`;
                           borderRadius: '10px',
                         }}
                       >
-                        Agrega una deuda abajo (Ej: <strong>Tarjeta</strong> y <strong>200.000</strong>).
+                        Todavía no tienes deudas registradas. Usa el formulario de abajo para agregar una.
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -4775,7 +4810,10 @@ endstream`;
                       </div>
                     )}
 
-                    <form onSubmit={handleAddDebt} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <form onSubmit={handleAddDebt} style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: `1px solid ${theme.border}`, paddingTop: '10px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: theme.accentBlueText }}>
+                        Aquí se agrega una deuda nueva (escribe a quién le debes, el monto y si tiene fecha límite):
+                      </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '8px' }}>
                         <input
                           type="text"
@@ -4885,6 +4923,11 @@ endstream`;
               <div className={`smooth-collapse ${openSections.editarSuscripciones ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      {data.subscriptions.length === 0
+                        ? 'Aquí podrás modificar el valor, la próxima fecha de cobro o la cuenta de tus suscripciones mensuales una vez las crees en la pestaña Suscripciones.'
+                        : 'Modifica aquí el nombre, el valor, la próxima fecha de cobro o la cuenta vinculada de tus suscripciones.'}
+                    </div>
                     {data.subscriptions.length === 0 ? (
                       <div style={{ fontSize: '12px', color: theme.textMuted }}>No hay suscripciones para editar.</div>
                     ) : (
@@ -4935,8 +4978,8 @@ endstream`;
                             </div>
                           </div>
 
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '10px', alignItems: 'end' }}>
+                            <div style={{ minWidth: 0 }}>
                               <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
                                 Próxima fecha de cobro
                               </label>
@@ -4953,17 +4996,28 @@ endstream`;
                                     nextDueDate: e.target.value,
                                   })
                                 }
-                                style={{ ...baseInputStyle, width: '100%' }}
+                                style={{
+                                  ...baseInputStyle,
+                                  padding: '9px 8px',
+                                  fontSize: '12px',
+                                  WebkitAppearance: 'none',
+                                  appearance: 'none',
+                                }}
                               />
                             </div>
-                            <div>
+                            <div style={{ minWidth: 0 }}>
                               <label style={{ fontSize: '11px', color: theme.textSecondary, display: 'block', marginBottom: '3px' }}>
                                 Cuenta que paga
                               </label>
                               <select
                                 value={sub.accountId}
                                 onChange={(e) => handleUpdateSubscription(sub.id, { accountId: e.target.value })}
-                                style={{ ...baseInputStyle, width: '100%' }}
+                                style={{
+                                  ...baseInputStyle,
+                                  padding: '9px 8px',
+                                  fontSize: '12px',
+                                  textOverflow: 'ellipsis',
+                                }}
                               >
                                 {data.accounts.map((acc) => (
                                   <option key={acc.id} value={acc.id}>
@@ -5016,6 +5070,11 @@ endstream`;
               <div className={`smooth-collapse ${openSections.editarDeseos ? 'open' : 'closed'}`}>
                 <div className="smooth-collapse-inner">
                   <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      {data.wishes.length === 0
+                        ? 'Aquí podrás cambiar el nombre o el precio estimado de las metas y compras que agregues en la pestaña Deseos.'
+                        : 'Actualiza aquí el nombre o el precio estimado de tus deseos.'}
+                    </div>
                     {data.wishes.length === 0 ? (
                       <div style={{ fontSize: '12px', color: theme.textMuted }}>No hay deseos para editar.</div>
                     ) : (
@@ -5070,7 +5129,7 @@ endstream`;
               </div>
             </section>
 
-            {/* Botón directo al final: Descargar PDF */}
+            {/* Botón directo: Descargar PDF */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
               <button
                 type="button"
@@ -5092,6 +5151,26 @@ endstream`;
               <div style={{ fontSize: '11px', color: theme.textMuted, paddingLeft: '4px', lineHeight: 1.35 }}>
                 Genera el reporte completo con tus cuentas, deudas, suscripciones, deseos y movimientos para guardarlo en PDF.
               </div>
+            </div>
+
+            {/* Opción discreta al final para dejar la cuenta en cero */}
+            <div style={{ marginTop: '14px', paddingTop: '10px', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setResetConfirmStep(1)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: '4px 8px',
+                  color: theme.textMuted,
+                  fontSize: '11px',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  opacity: 0.85,
+                }}
+              >
+                Borrar todo y dejar cuenta en cero
+              </button>
             </div>
           </div>
         )}
@@ -7189,6 +7268,165 @@ endstream`;
                 }}
               >
                 Sí
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL PASO 1: EXPLICACIÓN BORRAR TODO ================= */}
+      {resetConfirmStep === 1 && (
+        <div
+          className="ios-backdrop-enter"
+          onClick={() => setResetConfirmStep(0)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 70,
+            backgroundColor: 'rgba(0, 0, 0, 0.82)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            className="ios-screen-enter"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '340px',
+              backgroundColor: theme.cardSolid,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '20px',
+              padding: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>
+              Dejar la cuenta en cero
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45, marginBottom: '18px' }}>
+              Esto sirve para borrar toda la información que tienes guardada (cuentas, movimientos, deudas, suscripciones, deseos y categorías) y dejar la aplicación como recién iniciada por primera vez.
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setResetConfirmStep(0)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.cardSubtle,
+                  color: theme.textPrimary,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetConfirmStep(2)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.accentBlue,
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Okay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL PASO 2: DOBLE CONFIRMACIÓN BORRAR TODO ================= */}
+      {resetConfirmStep === 2 && (
+        <div
+          className="ios-backdrop-enter"
+          onClick={() => setResetConfirmStep(0)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 75,
+            backgroundColor: 'rgba(0, 0, 0, 0.86)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            className="ios-screen-enter"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '340px',
+              backgroundColor: theme.cardSolid,
+              border: `1.5px solid ${theme.danger}`,
+              borderRadius: '20px',
+              padding: '20px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 800, color: theme.danger, marginBottom: '8px' }}>
+              ¿Seguro que quieres borrar todo?
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45, marginBottom: '18px' }}>
+              Esta acción eliminará todos tus registros de este dispositivo y no se puede deshacer (a menos que hayas exportado un respaldo antes).
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setResetConfirmStep(0)}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: `1px solid ${theme.border}`,
+                  backgroundColor: theme.cardSubtle,
+                  color: theme.textPrimary,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                No, conservar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const freshData = {
+                    ...DEFAULT_DATA,
+                    firstOpenedAt: new Date().toISOString(),
+                  };
+                  try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(freshData));
+                  } catch (err) {
+                    console.error(err);
+                  }
+                  setData(freshData);
+                  setResetConfirmStep(0);
+                  setActiveTab('inicio');
+                }}
+                style={{
+                  flex: 1,
+                  padding: '11px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  backgroundColor: theme.danger,
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí, borrar
               </button>
             </div>
           </div>
