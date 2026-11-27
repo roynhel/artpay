@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.26';
+const APP_VERSION = 'v1.0.27';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -435,8 +435,9 @@ export default function App() {
   const [transferError, setTransferError] = useState('');
 
   // Filtros en Todos los movimientos
-  const [txFilterType, setTxFilterType] = useState('todos'); // 'todos' | 'ingreso' | 'gasto'
+  const [txFilterType, setTxFilterType] = useState('todos'); // 'todos' | 'ingreso' | 'gasto' | 'transferencia'
   const [txFilterAccountId, setTxFilterAccountId] = useState('todas');
+  const [txFilterCategoryName, setTxFilterCategoryName] = useState('todas');
 
   // Detalle de movimiento al tocarlo
   const [selectedTxDetail, setSelectedTxDetail] = useState(null);
@@ -462,6 +463,14 @@ export default function App() {
 
   // Filtro de rango en Estadísticas: 'dia' | 'semana' | 'mes'
   const [statsPeriod, setStatsPeriod] = useState('dia');
+
+  // Comparador personalizado en Estadísticas (Categoría + Subcategoría A vs B)
+  const [cmpAType, setCmpAType] = useState('ingreso'); // 'ingreso' | 'gasto'
+  const [cmpACategory, setCmpACategory] = useState('');
+  const [cmpASubcategory, setCmpASubcategory] = useState('');
+  const [cmpBType, setCmpBType] = useState('gasto'); // 'ingreso' | 'gasto'
+  const [cmpBCategory, setCmpBCategory] = useState('');
+  const [cmpBSubcategory, setCmpBSubcategory] = useState('');
 
   // Gestos de deslizamiento horizontal para abrir/cerrar menú lateral
   const swipeStartX = useRef(null);
@@ -1567,13 +1576,27 @@ export default function App() {
     return groups;
   }, []);
 
+  const availableFilterCategories = useMemo(() => {
+    const names = new Set();
+    data.categories.forEach((c) => {
+      if (c && c.name) names.add(c.name);
+    });
+    data.transactions.forEach((tx) => {
+      if (tx && tx.categoryName && tx.type !== 'transferencia') {
+        names.add(tx.categoryName);
+      }
+    });
+    return Array.from(names);
+  }, [data.categories, data.transactions]);
+
   const filteredAllTransactions = useMemo(() => {
     return data.transactions.filter((tx) => {
       if (txFilterType !== 'todos' && tx.type !== txFilterType) return false;
       if (txFilterAccountId !== 'todas' && tx.accountId !== txFilterAccountId) return false;
+      if (txFilterCategoryName !== 'todas' && tx.categoryName !== txFilterCategoryName) return false;
       return true;
     });
-  }, [data.transactions, txFilterType, txFilterAccountId]);
+  }, [data.transactions, txFilterType, txFilterAccountId, txFilterCategoryName]);
 
   const recentGroupedTransactions = useMemo(
     () => groupTransactionsByDay(data.transactions.slice(0, 6)),
@@ -3139,11 +3162,12 @@ endstream`;
                 gap: '8px',
               }}
             >
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '5px' }}>
                 {[
                   { id: 'todos', label: 'Todos' },
                   { id: 'ingreso', label: 'Ingresos' },
                   { id: 'gasto', label: 'Gastos' },
+                  { id: 'transferencia', label: 'Transfer.' },
                 ].map((flt) => {
                   const active = txFilterType === flt.id;
                   return (
@@ -3152,12 +3176,12 @@ endstream`;
                       type="button"
                       onClick={() => setTxFilterType(flt.id)}
                       style={{
-                        padding: '8px 6px',
+                        padding: '8px 4px',
                         borderRadius: '10px',
                         border: active ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
                         backgroundColor: active ? theme.accentBlueSoft : theme.cardSubtle,
                         color: active ? theme.accentBlueText : theme.textSecondary,
-                        fontSize: '12px',
+                        fontSize: '11px',
                         fontWeight: 700,
                         cursor: 'pointer',
                       }}
@@ -3168,18 +3192,33 @@ endstream`;
                 })}
               </div>
 
-              <select
-                value={txFilterAccountId}
-                onChange={(e) => setTxFilterAccountId(e.target.value)}
-                style={baseInputStyle}
-              >
-                <option value="todas">Todas las cuentas</option>
-                {data.accounts.map((acc) => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.name}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '6px' }}>
+                <select
+                  value={txFilterAccountId}
+                  onChange={(e) => setTxFilterAccountId(e.target.value)}
+                  style={baseInputStyle}
+                >
+                  <option value="todas">Todas las cuentas</option>
+                  {data.accounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={txFilterCategoryName}
+                  onChange={(e) => setTxFilterCategoryName(e.target.value)}
+                  style={baseInputStyle}
+                >
+                  <option value="todas">Todas las categorías</option>
+                  {availableFilterCategories.map((catName) => (
+                    <option key={catName} value={catName}>
+                      {catName}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {filteredGroupedTransactions.length === 0 ? (
@@ -3292,6 +3331,261 @@ endstream`;
                 </div>
               </div>
             </section>
+
+            {/* Comparador personalizado por categoría y subcategoría */}
+            {(() => {
+              const now = new Date();
+              const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+              const startOfWeek = startOfToday - 6 * 24 * 60 * 60 * 1000;
+              const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+              const periodTx = data.transactions.filter((t) => {
+                if (!t.date) return false;
+                const txTime = new Date(t.date).getTime();
+                if (Number.isNaN(txTime)) return false;
+                const isSameDay = getLocalDayKey(new Date(t.date)) === currentDayKey;
+                return statsPeriod === 'dia'
+                  ? isSameDay
+                  : statsPeriod === 'semana'
+                  ? txTime >= startOfWeek
+                  : txTime >= startOfMonth;
+              });
+
+              const getCategoriesForType = (typeFilter) => {
+                const set = new Set();
+                data.categories.forEach((c) => {
+                  if (c && c.name) set.add(c.name);
+                });
+                periodTx.forEach((t) => {
+                  if (t.type === typeFilter && t.categoryName) set.add(t.categoryName);
+                });
+                return Array.from(set);
+              };
+
+              const getSubcategoriesForCat = (catName, typeFilter) => {
+                const set = new Set();
+                const catObj = data.categories.find((c) => c.name === catName);
+                if (catObj && Array.isArray(catObj.subcategories)) {
+                  catObj.subcategories.forEach((s) => {
+                    if (s) set.add(s);
+                  });
+                }
+                periodTx.forEach((t) => {
+                  if (
+                    t.type === typeFilter &&
+                    t.categoryName === catName &&
+                    t.subcategoryName
+                  ) {
+                    set.add(t.subcategoryName);
+                  }
+                });
+                return Array.from(set);
+              };
+
+              const calcCustomTotal = (typeFilter, catName, subName) => {
+                if (!catName) return 0;
+                return periodTx.reduce((sum, t) => {
+                  if (t.type !== typeFilter) return sum;
+                  if ((t.categoryName || 'General') !== catName) return sum;
+                  if (subName && (t.subcategoryName || '') !== subName) return sum;
+                  return sum + (Number(t.amount) || 0);
+                }, 0);
+              };
+
+              const catsA = getCategoriesForType(cmpAType);
+              const subsA = cmpACategory ? getSubcategoriesForCat(cmpACategory, cmpAType) : [];
+              const catsB = getCategoriesForType(cmpBType);
+              const subsB = cmpBCategory ? getSubcategoriesForCat(cmpBCategory, cmpBType) : [];
+
+              const totalA = calcCustomTotal(cmpAType, cmpACategory, cmpASubcategory);
+              const totalB = calcCustomTotal(cmpBType, cmpBCategory, cmpBSubcategory);
+              const customDenom = Math.max(totalA + totalB, 1);
+
+              const labelA = cmpACategory
+                ? `${cmpACategory}${cmpASubcategory ? ` • ${cmpASubcategory}` : ''}`
+                : 'Elige categoría A';
+              const labelB = cmpBCategory
+                ? `${cmpBCategory}${cmpBSubcategory ? ` • ${cmpBSubcategory}` : ''}`
+                : 'Elige categoría B';
+
+              const colorA = cmpAType === 'ingreso' ? theme.success : theme.danger;
+              const colorB = cmpBType === 'ingreso' ? theme.success : theme.danger;
+
+              return (
+                <section
+                  style={{
+                    background: theme.card,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '18px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ fontSize: '14px', fontWeight: 700 }}>
+                    Comparar categorías
+                  </div>
+
+                  {/* Selector A */}
+                  <div
+                    style={{
+                      backgroundColor: theme.cardSubtle,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '12px',
+                      padding: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px',
+                    }}
+                  >
+                    <div style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: '6px' }}>
+                      <select
+                        value={cmpAType}
+                        onChange={(e) => {
+                          setCmpAType(e.target.value);
+                          setCmpASubcategory('');
+                        }}
+                        style={{ ...baseInputStyle, padding: '8px 6px', fontSize: '12px' }}
+                      >
+                        <option value="ingreso">Ingreso</option>
+                        <option value="gasto">Gasto</option>
+                      </select>
+
+                      <select
+                        value={cmpACategory}
+                        onChange={(e) => {
+                          setCmpACategory(e.target.value);
+                          setCmpASubcategory('');
+                        }}
+                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
+                      >
+                        <option value="">Selecciona categoría...</option>
+                        {catsA.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {cmpACategory && subsA.length > 0 && (
+                      <select
+                        value={cmpASubcategory}
+                        onChange={(e) => setCmpASubcategory(e.target.value)}
+                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
+                      >
+                        <option value="">Todas las subcategorías de {cmpACategory}</option>
+                        {subsA.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Selector B */}
+                  <div
+                    style={{
+                      backgroundColor: theme.cardSubtle,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '12px',
+                      padding: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px',
+                    }}
+                  >
+                    <div style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: '6px' }}>
+                      <select
+                        value={cmpBType}
+                        onChange={(e) => {
+                          setCmpBType(e.target.value);
+                          setCmpBSubcategory('');
+                        }}
+                        style={{ ...baseInputStyle, padding: '8px 6px', fontSize: '12px' }}
+                      >
+                        <option value="ingreso">Ingreso</option>
+                        <option value="gasto">Gasto</option>
+                      </select>
+
+                      <select
+                        value={cmpBCategory}
+                        onChange={(e) => {
+                          setCmpBCategory(e.target.value);
+                          setCmpBSubcategory('');
+                        }}
+                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
+                      >
+                        <option value="">Selecciona categoría...</option>
+                        {catsB.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {cmpBCategory && subsB.length > 0 && (
+                      <select
+                        value={cmpBSubcategory}
+                        onChange={(e) => setCmpBSubcategory(e.target.value)}
+                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
+                      >
+                        <option value="">Todas las subcategorías de {cmpBCategory}</option>
+                        {subsB.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Barras comparativas */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', gap: '8px' }}>
+                      <span style={{ color: theme.textSecondary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {labelA}
+                      </span>
+                      <span style={{ color: colorA, fontWeight: 700, whiteSpace: 'nowrap' }}>{renderMoney(totalA)}</span>
+                    </div>
+                    <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.cardSubtle, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${cmpACategory ? Math.round((totalA / customDenom) * 100) : 0}%`,
+                          height: '100%',
+                          backgroundColor: colorA,
+                          borderRadius: '999px',
+                          transition: `width 0.4s ${iosEase}`,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', gap: '8px' }}>
+                      <span style={{ color: theme.textSecondary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {labelB}
+                      </span>
+                      <span style={{ color: colorB, fontWeight: 700, whiteSpace: 'nowrap' }}>{renderMoney(totalB)}</span>
+                    </div>
+                    <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.cardSubtle, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${cmpBCategory ? Math.round((totalB / customDenom) * 100) : 0}%`,
+                          height: '100%',
+                          backgroundColor: colorB,
+                          borderRadius: '999px',
+                          transition: `width 0.4s ${iosEase}`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </section>
+              );
+            })()}
 
             {data.transactions.length === 0 && (
               <section
@@ -6782,20 +7076,55 @@ endstream`;
               </div>
             )}
 
-            <select
-              value={txAccount}
-              onChange={(e) => {
-                setTxAccount(e.target.value);
-                if (txError) setTxError('');
+            <div
+              style={{
+                backgroundColor: theme.cardSubtle,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '12px',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
               }}
-              style={{ ...baseInputStyle, fontSize: '14px', padding: '12px' }}
             >
-              {data.accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.name} ({formatMoneyByCurrency(acc.balance, currency)})
-                </option>
-              ))}
-            </select>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary }}>
+                Cuenta
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {data.accounts.map((acc) => {
+                  const selectedAcc = txAccount === acc.id;
+                  return (
+                    <button
+                      key={acc.id}
+                      type="button"
+                      onClick={() => {
+                        setTxAccount(acc.id);
+                        if (txError) setTxError('');
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '8px 12px',
+                        borderRadius: '11px',
+                        border: selectedAcc ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                        backgroundColor: selectedAcc ? theme.accentBlueSoft : theme.inputBg,
+                        color: selectedAcc ? theme.accentBlueText : theme.textPrimary,
+                        fontSize: '13px',
+                        fontWeight: selectedAcc ? 700 : 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span>{selectedAcc ? '✓' : '○'}</span>
+                      <span>{acc.name}</span>
+                      <span style={{ fontSize: '11px', opacity: 0.85 }}>
+                        ({formatMoneyByCurrency(acc.balance, currency)})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {txError && (
               <div
