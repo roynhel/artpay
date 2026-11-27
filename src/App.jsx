@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.27';
+const APP_VERSION = 'v1.0.28';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -526,10 +526,11 @@ export default function App() {
     editarDeseos: false,
   });
 
-  // Secciones en Estadísticas: abiertas por defecto
+  // Secciones en Estadísticas: categorías abiertas, comparador minimizado por defecto
   const [openStats, setOpenStats] = useState({
     gastosCat: true,
     ingresosCat: true,
+    compararCat: false,
   });
 
   // Inputs y avisos de validación en Configuración y Deseos
@@ -3332,7 +3333,7 @@ endstream`;
               </div>
             </section>
 
-            {/* Comparador personalizado por categoría y subcategoría */}
+            {/* Comparador personalizado por categoría y subcategoría (minimizado por defecto) */}
             {(() => {
               const now = new Date();
               const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -3403,13 +3404,143 @@ endstream`;
 
               const labelA = cmpACategory
                 ? `${cmpACategory}${cmpASubcategory ? ` • ${cmpASubcategory}` : ''}`
-                : 'Elige categoría A';
+                : 'Elemento 1 sin elegir';
               const labelB = cmpBCategory
                 ? `${cmpBCategory}${cmpBSubcategory ? ` • ${cmpBSubcategory}` : ''}`
-                : 'Elige categoría B';
+                : 'Elemento 2 sin elegir';
 
               const colorA = cmpAType === 'ingreso' ? theme.success : theme.danger;
               const colorB = cmpBType === 'ingreso' ? theme.success : theme.danger;
+              const isCompareOpen = !!openStats.compararCat;
+              const hasAnyCompareSelection = Boolean(cmpACategory || cmpBCategory || cmpASubcategory || cmpBSubcategory);
+
+              const handleResetComparator = () => {
+                setCmpAType('ingreso');
+                setCmpACategory('');
+                setCmpASubcategory('');
+                setCmpBType('gasto');
+                setCmpBCategory('');
+                setCmpBSubcategory('');
+              };
+
+              const renderCompareSlot = (slotTitle, slotType, setSlotType, slotCat, setSlotCat, slotSub, setSlotSub, slotCats, slotSubs) => {
+                const slotAccent = slotType === 'ingreso' ? theme.success : theme.danger;
+                const slotSoftBg = slotType === 'ingreso' ? theme.successBg : theme.dangerBg;
+
+                return (
+                  <div
+                    style={{
+                      backgroundColor: theme.cardSubtle,
+                      border: `1px solid ${slotCat ? slotAccent : theme.border}`,
+                      borderRadius: '14px',
+                      padding: '10px 12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {slotTitle}
+                      </span>
+                      <div style={{ display: 'inline-grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                        {[
+                          { id: 'ingreso', label: 'Ingreso', activeColor: theme.success, activeBg: theme.successBg },
+                          { id: 'gasto', label: 'Gasto', activeColor: theme.danger, activeBg: theme.dangerBg },
+                        ].map((tOpt) => {
+                          const isT = slotType === tOpt.id;
+                          return (
+                            <button
+                              key={tOpt.id}
+                              type="button"
+                              onClick={() => {
+                                setSlotType(tOpt.id);
+                                setSlotSub('');
+                              }}
+                              style={{
+                                padding: '4px 9px',
+                                borderRadius: '8px',
+                                border: `1px solid ${isT ? tOpt.activeColor : theme.border}`,
+                                backgroundColor: isT ? tOpt.activeBg : theme.inputBg,
+                                color: isT ? tOpt.activeColor : theme.textMuted,
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {tOpt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <select
+                      value={slotCat}
+                      onChange={(e) => {
+                        setSlotCat(e.target.value);
+                        setSlotSub('');
+                      }}
+                      style={{ ...baseInputStyle, padding: '8px 10px', fontSize: '12px', fontWeight: 600 }}
+                    >
+                      <option value="">Selecciona categoría...</option>
+                      {slotCats.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+
+                    {slotCat && slotSubs.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <span style={{ fontSize: '11px', color: theme.textMuted }}>
+                          Subcategoría (opcional):
+                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                          <button
+                            type="button"
+                            onClick={() => setSlotSub('')}
+                            style={{
+                              padding: '4px 9px',
+                              borderRadius: '999px',
+                              border: `1px solid ${!slotSub ? slotAccent : theme.border}`,
+                              backgroundColor: !slotSub ? slotSoftBg : theme.inputBg,
+                              color: !slotSub ? slotAccent : theme.textSecondary,
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Todas
+                          </button>
+                          {slotSubs.map((s) => {
+                            const isSub = slotSub === s;
+                            return (
+                              <button
+                                key={s}
+                                type="button"
+                                onClick={() => setSlotSub(isSub ? '' : s)}
+                                style={{
+                                  padding: '4px 9px',
+                                  borderRadius: '999px',
+                                  border: `1px solid ${isSub ? slotAccent : theme.border}`,
+                                  backgroundColor: isSub ? slotSoftBg : theme.inputBg,
+                                  color: isSub ? slotAccent : theme.textSecondary,
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {s}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              };
 
               return (
                 <section
@@ -3417,170 +3548,146 @@ endstream`;
                     background: theme.card,
                     border: `1px solid ${theme.border}`,
                     borderRadius: '18px',
-                    padding: '16px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px',
+                    overflow: 'hidden',
                   }}
                 >
-                  <div style={{ fontSize: '14px', fontWeight: 700 }}>
-                    Comparar categorías
-                  </div>
-
-                  {/* Selector A */}
-                  <div
+                  <button
+                    type="button"
+                    onClick={() => toggleStat('compararCat')}
                     style={{
-                      backgroundColor: theme.cardSubtle,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '12px',
-                      padding: '10px',
+                      width: '100%',
+                      padding: '15px 16px',
+                      background: 'none',
+                      border: 'none',
+                      color: theme.textPrimary,
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: '6px',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'pointer',
                     }}
                   >
-                    <div style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: '6px' }}>
-                      <select
-                        value={cmpAType}
-                        onChange={(e) => {
-                          setCmpAType(e.target.value);
-                          setCmpASubcategory('');
-                        }}
-                        style={{ ...baseInputStyle, padding: '8px 6px', fontSize: '12px' }}
-                      >
-                        <option value="ingreso">Ingreso</option>
-                        <option value="gasto">Gasto</option>
-                      </select>
-
-                      <select
-                        value={cmpACategory}
-                        onChange={(e) => {
-                          setCmpACategory(e.target.value);
-                          setCmpASubcategory('');
-                        }}
-                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
-                      >
-                        <option value="">Selecciona categoría...</option>
-                        {catsA.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 700 }}>Comparar categorías</span>
+                      {hasAnyCompareSelection && (
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: '999px',
+                            backgroundColor: theme.accentBlueSoft,
+                            color: theme.accentBlueText,
+                          }}
+                        >
+                          Activo
+                        </span>
+                      )}
                     </div>
+                    <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                      {isCompareOpen ? '▲' : '▼'}
+                    </span>
+                  </button>
 
-                    {cmpACategory && subsA.length > 0 && (
-                      <select
-                        value={cmpASubcategory}
-                        onChange={(e) => setCmpASubcategory(e.target.value)}
-                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
-                      >
-                        <option value="">Todas las subcategorías de {cmpACategory}</option>
-                        {subsA.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
+                  <div className={`smooth-collapse ${isCompareOpen ? 'open' : 'closed'}`}>
+                    <div className="smooth-collapse-inner">
+                      <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {renderCompareSlot(
+                          'Elemento 1',
+                          cmpAType,
+                          setCmpAType,
+                          cmpACategory,
+                          setCmpACategory,
+                          cmpASubcategory,
+                          setCmpASubcategory,
+                          catsA,
+                          subsA
+                        )}
 
-                  {/* Selector B */}
-                  <div
-                    style={{
-                      backgroundColor: theme.cardSubtle,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '12px',
-                      padding: '10px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '6px',
-                    }}
-                  >
-                    <div style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: '6px' }}>
-                      <select
-                        value={cmpBType}
-                        onChange={(e) => {
-                          setCmpBType(e.target.value);
-                          setCmpBSubcategory('');
-                        }}
-                        style={{ ...baseInputStyle, padding: '8px 6px', fontSize: '12px' }}
-                      >
-                        <option value="ingreso">Ingreso</option>
-                        <option value="gasto">Gasto</option>
-                      </select>
+                        {renderCompareSlot(
+                          'Elemento 2',
+                          cmpBType,
+                          setCmpBType,
+                          cmpBCategory,
+                          setCmpBCategory,
+                          cmpBSubcategory,
+                          setCmpBSubcategory,
+                          catsB,
+                          subsB
+                        )}
 
-                      <select
-                        value={cmpBCategory}
-                        onChange={(e) => {
-                          setCmpBCategory(e.target.value);
-                          setCmpBSubcategory('');
-                        }}
-                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
-                      >
-                        <option value="">Selecciona categoría...</option>
-                        {catsB.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                        {/* Tabla / barras comparativas */}
+                        <div
+                          style={{
+                            backgroundColor: theme.cardSubtle,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '14px',
+                            padding: '12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '10px',
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', gap: '8px' }}>
+                              <span style={{ color: theme.textSecondary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {labelA}
+                              </span>
+                              <span style={{ color: colorA, fontWeight: 700, whiteSpace: 'nowrap' }}>{renderMoney(totalA)}</span>
+                            </div>
+                            <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.inputBg, overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${cmpACategory ? Math.round((totalA / customDenom) * 100) : 0}%`,
+                                  height: '100%',
+                                  backgroundColor: colorA,
+                                  borderRadius: '999px',
+                                  transition: `width 0.4s ${iosEase}`,
+                                }}
+                              />
+                            </div>
+                          </div>
 
-                    {cmpBCategory && subsB.length > 0 && (
-                      <select
-                        value={cmpBSubcategory}
-                        onChange={(e) => setCmpBSubcategory(e.target.value)}
-                        style={{ ...baseInputStyle, padding: '8px', fontSize: '12px' }}
-                      >
-                        <option value="">Todas las subcategorías de {cmpBCategory}</option>
-                        {subsB.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', gap: '8px' }}>
+                              <span style={{ color: theme.textSecondary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {labelB}
+                              </span>
+                              <span style={{ color: colorB, fontWeight: 700, whiteSpace: 'nowrap' }}>{renderMoney(totalB)}</span>
+                            </div>
+                            <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.inputBg, overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${cmpBCategory ? Math.round((totalB / customDenom) * 100) : 0}%`,
+                                  height: '100%',
+                                  backgroundColor: colorB,
+                                  borderRadius: '999px',
+                                  transition: `width 0.4s ${iosEase}`,
+                                }}
+                              />
+                            </div>
+                          </div>
 
-                  {/* Barras comparativas */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', gap: '8px' }}>
-                      <span style={{ color: theme.textSecondary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {labelA}
-                      </span>
-                      <span style={{ color: colorA, fontWeight: 700, whiteSpace: 'nowrap' }}>{renderMoney(totalA)}</span>
-                    </div>
-                    <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.cardSubtle, overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          width: `${cmpACategory ? Math.round((totalA / customDenom) * 100) : 0}%`,
-                          height: '100%',
-                          backgroundColor: colorA,
-                          borderRadius: '999px',
-                          transition: `width 0.4s ${iosEase}`,
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', gap: '8px' }}>
-                      <span style={{ color: theme.textSecondary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {labelB}
-                      </span>
-                      <span style={{ color: colorB, fontWeight: 700, whiteSpace: 'nowrap' }}>{renderMoney(totalB)}</span>
-                    </div>
-                    <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.cardSubtle, overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          width: `${cmpBCategory ? Math.round((totalB / customDenom) * 100) : 0}%`,
-                          height: '100%',
-                          backgroundColor: colorB,
-                          borderRadius: '999px',
-                          transition: `width 0.4s ${iosEase}`,
-                        }}
-                      />
+                          {hasAnyCompareSelection && (
+                            <button
+                              type="button"
+                              onClick={handleResetComparator}
+                              style={{
+                                alignSelf: 'flex-end',
+                                background: 'none',
+                                border: `1px solid ${theme.borderStrong}`,
+                                borderRadius: '9px',
+                                padding: '5px 10px',
+                                color: theme.textSecondary,
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Restablecer
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -7084,13 +7191,13 @@ endstream`;
                 padding: '10px 12px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '8px',
+                gap: '7px',
               }}
             >
               <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary }}>
                 Cuenta
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {data.accounts.map((acc) => {
                   const selectedAcc = txAccount === acc.id;
                   return (
@@ -7102,23 +7209,48 @@ endstream`;
                         if (txError) setTxError('');
                       }}
                       style={{
-                        display: 'inline-flex',
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        display: 'flex',
                         alignItems: 'center',
-                        gap: '6px',
-                        padding: '8px 12px',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        padding: '9px 12px',
                         borderRadius: '11px',
-                        border: selectedAcc ? `1.5px solid ${theme.accentBlue}` : `1px solid ${theme.border}`,
+                        border: `1.5px solid ${selectedAcc ? theme.accentBlue : theme.border}`,
                         backgroundColor: selectedAcc ? theme.accentBlueSoft : theme.inputBg,
                         color: selectedAcc ? theme.accentBlueText : theme.textPrimary,
                         fontSize: '13px',
-                        fontWeight: selectedAcc ? 700 : 500,
+                        fontWeight: 700,
                         cursor: 'pointer',
+                        textAlign: 'left',
                       }}
                     >
-                      <span>{selectedAcc ? '✓' : '○'}</span>
-                      <span>{acc.name}</span>
-                      <span style={{ fontSize: '11px', opacity: 0.85 }}>
-                        ({formatMoneyByCurrency(acc.balance, currency)})
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <span
+                          style={{
+                            width: '18px',
+                            height: '18px',
+                            borderRadius: '50%',
+                            border: `1.5px solid ${selectedAcc ? theme.accentBlue : theme.textMuted}`,
+                            backgroundColor: selectedAcc ? theme.accentBlue : 'transparent',
+                            color: '#FFFFFF',
+                            fontSize: '11px',
+                            fontWeight: 800,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {selectedAcc ? '✓' : ''}
+                        </span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {acc.name}
+                        </span>
+                      </span>
+                      <span style={{ fontSize: '12px', opacity: 0.9, flexShrink: 0 }}>
+                        {formatMoneyByCurrency(acc.balance, currency)}
                       </span>
                     </button>
                   );
