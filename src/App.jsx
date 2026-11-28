@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.0.28';
+const APP_VERSION = 'v1.1.0';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -252,7 +252,7 @@ const normalizeStoredData = (parsed) => ({
   onboardingDismissed: Boolean(parsed.onboardingDismissed),
   accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
   debts: Array.isArray(parsed.debts) ? parsed.debts : [],
-  transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
+  transactions: Array.isArray(parsed.transactions) ? parsed.transactions.slice(0, 100) : [],
   wishes: Array.isArray(parsed.wishes) ? parsed.wishes : [],
   subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
   quickAmounts: Array.isArray(parsed.quickAmounts)
@@ -368,6 +368,144 @@ const captureCurrentLocation = () =>
       }
     );
   });
+
+const normalizeSearchText = (str) =>
+  String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
+  const original = String(rawTranscript || '').trim();
+  const norm = normalizeSearchText(original);
+  if (!norm) return null;
+
+  // 1. Detectar tipo (ingreso vs gasto)
+  let detectedType = 'gasto';
+  const incomeKeywords = [
+    'ingreso',
+    'ingrese',
+    'me pagaron',
+    'me pago',
+    'me entraron',
+    'me entro',
+    'gane',
+    'ganancia',
+    'recibi',
+    'cobre',
+    'carrera',
+    'servicio',
+  ];
+  const expenseKeywords = [
+    'gasto',
+    'gaste',
+    'pague',
+    'compre',
+    'se fueron',
+    'se fue',
+    'eche',
+    'tanquee',
+    'abone',
+  ];
+
+  if (incomeKeywords.some((kw) => norm.includes(kw))) {
+    detectedType = 'ingreso';
+  } else if (expenseKeywords.some((kw) => norm.includes(kw))) {
+    detectedType = 'gasto';
+  }
+
+  // 2. Detectar monto (soporta "25 mil", "50 barras", "120.000", "2 millones", etc.)
+  let detectedAmount = 0;
+  const millionMatch = norm.match(/(\d+(?:[.,]\d+)?)\s*(?:millon|millones|palo|palos)\b/);
+  const thousandMatch = norm.match(/(\d+(?:[.,]\d+)?)\s*(?:mil|barras|lucas)\b/);
+
+  if (millionMatch) {
+    const numVal = parseFloat(millionMatch[1].replace(',', '.'));
+    if (!Number.isNaN(numVal) && numVal > 0) {
+      detectedAmount = Math.round(numVal * 1000000);
+    }
+  } else if (thousandMatch) {
+    const numVal = parseFloat(thousandMatch[1].replace(',', '.'));
+    if (!Number.isNaN(numVal) && numVal > 0) {
+      detectedAmount = Math.round(numVal * 1000);
+    }
+  } else {
+    const rawNumberMatches = original.match(/\d[\d.,]*/g);
+    if (rawNumberMatches && rawNumberMatches.length > 0) {
+      const candidates = rawNumberMatches
+        .map((m) => parseMoneyInput(m))
+        .filter((n) => n > 0);
+      if (candidates.length > 0) {
+        detectedAmount = Math.max(...candidates);
+      }
+    }
+  }
+
+  // 3. Detectar cuenta coincidente
+  let matchedAccount = null;
+  const sortedAccounts = [...(accounts || [])].sort(
+    (a, b) => normalizeSearchText(b.name).length - normalizeSearchText(a.name).length
+  );
+  for (let i = 0; i < sortedAccounts.length; i += 1) {
+    const acc = sortedAccounts[i];
+    const accNorm = normalizeSearchText(acc.name);
+    if (accNorm && norm.includes(accNorm)) {
+      matchedAccount = acc;
+      break;
+    }
+  }
+
+  // 4. Detectar categoría y subcategoría coincidente
+  let matchedCategory = null;
+  let matchedSubcategory = '';
+
+  const sortedCategories = [...(categories || [])].sort(
+    (a, b) => normalizeSearchText(b.name).length - normalizeSearchText(a.name).length
+  );
+
+  // Primero buscar coincidencia exacta de subcategoría (porque identifica también su categoría padre)
+  for (let i = 0; i < sortedCategories.length; i += 1) {
+    const cat = sortedCategories[i];
+    const subs = Array.isArray(cat.subcategories) ? cat.subcategories : [];
+    const sortedSubs = [...subs].sort(
+      (a, b) => normalizeSearchText(b).length - normalizeSearchText(a).length
+    );
+    for (let j = 0; j < sortedSubs.length; j += 1) {
+      const sub = sortedSubs[j];
+      const subNorm = normalizeSearchText(sub);
+      if (subNorm && norm.includes(subNorm)) {
+        matchedCategory = cat;
+        matchedSubcategory = sub;
+        break;
+      }
+    }
+    if (matchedCategory) break;
+  }
+
+  // Si no coincidió ninguna subcategoría, buscar coincidencia por nombre de categoría
+  if (!matchedCategory) {
+    for (let i = 0; i < sortedCategories.length; i += 1) {
+      const cat = sortedCategories[i];
+      const catNorm = normalizeSearchText(cat.name);
+      if (catNorm && norm.includes(catNorm)) {
+        matchedCategory = cat;
+        break;
+      }
+    }
+  }
+
+  return {
+    transcript: original,
+    type: detectedType,
+    amount: detectedAmount,
+    account: matchedAccount,
+    category: matchedCategory,
+    subcategory: matchedSubcategory,
+  };
+};
 
 export default function App() {
   const [data, setData] = useState(() => {
@@ -514,6 +652,9 @@ export default function App() {
   const [txSavingLocation, setTxSavingLocation] = useState(false);
   const [txNote, setTxNote] = useState('');
   const [txError, setTxError] = useState('');
+  const [isListeningVoice, setIsListeningVoice] = useState(false);
+  const [voiceFeedbackText, setVoiceFeedbackText] = useState('');
+  const voiceRecognitionRef = useRef(null);
 
   // Secciones en Configuración: solo Perfil y moneda y Apariencia abiertas por defecto
   const [openSections, setOpenSections] = useState({
@@ -864,7 +1005,7 @@ export default function App() {
     setData((prev) => ({
       ...prev,
       accounts: updatedAccounts,
-      transactions: [transferTx, ...prev.transactions],
+      transactions: [transferTx, ...prev.transactions].slice(0, 100),
     }));
     setShowTransferModal(false);
   };
@@ -938,7 +1079,7 @@ export default function App() {
       ...prev,
       accounts: updatedAccounts,
       debts: nextDebts,
-      transactions: [newTx, ...prev.transactions],
+      transactions: [newTx, ...prev.transactions].slice(0, 100),
     }));
 
     const paidDebtName = selectedDebtForPayment.name;
@@ -1334,7 +1475,7 @@ export default function App() {
     setData((prev) => ({
       ...prev,
       accounts: updatedAccounts,
-      transactions: [newTx, ...prev.transactions],
+      transactions: [newTx, ...prev.transactions].slice(0, 100),
       subscriptions: updatedSubs,
     }));
     setSubToChargeConfirm(null);
@@ -1428,11 +1569,34 @@ export default function App() {
   }, [computedSubscriptions]);
 
   // --- Movimientos ---
+  const lastRepeatableTransaction = useMemo(() => {
+    return data.transactions.find((t) => t && t.type !== 'transferencia' && Number(t.amount) > 0) || null;
+  }, [data.transactions]);
+
+  const stopVoiceListening = useCallback(() => {
+    if (voiceRecognitionRef.current) {
+      try {
+        voiceRecognitionRef.current.stop();
+      } catch {
+        // Ignorar si ya estaba detenido
+      }
+      voiceRecognitionRef.current = null;
+    }
+    setIsListeningVoice(false);
+  }, []);
+
+  const closeTransactionModal = useCallback(() => {
+    stopVoiceListening();
+    setVoiceFeedbackText('');
+    setShowTxModal(false);
+  }, [stopVoiceListening]);
+
   const openTransactionModal = () => {
     if (data.accounts.length === 0) {
       setNoAccountAlert(true);
       return;
     }
+    stopVoiceListening();
     setTxType('gasto');
     setTxAmount('');
     setTxAccount(data.accounts[0]?.id || '');
@@ -1445,7 +1609,162 @@ export default function App() {
     setTxSavingLocation(false);
     setTxNote('');
     setTxError('');
+    setVoiceFeedbackText('');
     setShowTxModal(true);
+  };
+
+  const handleRepeatLastTransactionInstant = () => {
+    if (!lastRepeatableTransaction || txSavingLocation) return;
+    setTxError('');
+    const amt = Number(lastRepeatableTransaction.amount) || 0;
+    if (amt <= 0) return;
+
+    const targetAcc =
+      data.accounts.find((a) => a.id === lastRepeatableTransaction.accountId) || data.accounts[0];
+    if (!targetAcc) {
+      setTxError('No hay una cuenta disponible para repetir el movimiento.');
+      return;
+    }
+
+    if (lastRepeatableTransaction.type === 'gasto') {
+      const currentBal = Number(targetAcc.balance) || 0;
+      if (amt > currentBal) {
+        setTxError(
+          `No alcanza el saldo en ${targetAcc.name} (${formatMoneyByCurrency(currentBal, currency)}) para repetir este gasto de ${formatMoneyByCurrency(amt, currency)}.`
+        );
+        return;
+      }
+    }
+
+    const activeCatObj = data.categories.find(
+      (c) => c && c.name === lastRepeatableTransaction.categoryName
+    );
+    const resolvedCategoryName = activeCatObj
+      ? activeCatObj.name
+      : lastRepeatableTransaction.categoryName || 'General';
+    const resolvedCategoryIcon = activeCatObj
+      ? activeCatObj.icon || 'none'
+      : ALLOWED_ICON_IDS.has(lastRepeatableTransaction.categoryIcon)
+      ? lastRepeatableTransaction.categoryIcon
+      : 'none';
+    const resolvedSubcategory =
+      activeCatObj &&
+      Array.isArray(activeCatObj.subcategories) &&
+      activeCatObj.subcategories.includes(lastRepeatableTransaction.subcategoryName)
+        ? lastRepeatableTransaction.subcategoryName
+        : lastRepeatableTransaction.subcategoryName || '';
+
+    const repeatedTx = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type: lastRepeatableTransaction.type,
+      amount: amt,
+      accountId: targetAcc.id,
+      accountName: targetAcc.name,
+      categoryName: resolvedCategoryName,
+      subcategoryName: resolvedSubcategory,
+      categoryIcon: resolvedCategoryIcon,
+      note: lastRepeatableTransaction.note || '',
+      location: null,
+      date: new Date().toISOString(),
+    };
+
+    const updatedAccounts = data.accounts.map((acc) => {
+      if (acc.id !== targetAcc.id) return acc;
+      const delta = repeatedTx.type === 'ingreso' ? amt : -amt;
+      return { ...acc, balance: Math.max(0, (Number(acc.balance) || 0) + delta) };
+    });
+
+    setData((prev) => ({
+      ...prev,
+      accounts: updatedAccounts,
+      transactions: [repeatedTx, ...prev.transactions].slice(0, 100),
+    }));
+
+    closeTransactionModal();
+    setCelebrationBanner(
+      `Repetido: ${repeatedTx.type === 'ingreso' ? '+' : '-'}${formatMoneyByCurrency(amt, currency)} (${repeatedTx.categoryName})`
+    );
+    setTimeout(() => setCelebrationBanner(''), 3500);
+  };
+
+  const handleToggleVoiceCommand = () => {
+    if (isListeningVoice) {
+      stopVoiceListening();
+      return;
+    }
+
+    setTxError('');
+    const SpeechRec =
+      typeof window !== 'undefined'
+        ? window.SpeechRecognition || window.webkitSpeechRecognition
+        : null;
+
+    if (!SpeechRec) {
+      setVoiceFeedbackText(
+        'Tu navegador no soporta dictado por voz directo. Prueba en Chrome o usa el teclado con micrófono.'
+      );
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRec();
+      recognition.lang = 'es-CO';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      voiceRecognitionRef.current = recognition;
+
+      setIsListeningVoice(true);
+      setVoiceFeedbackText('Escuchando... Di por ejemplo: "Gasté 25 mil en Nequi de gasolina"');
+
+      recognition.onresult = (event) => {
+        const spoken = event.results?.[0]?.[0]?.transcript || '';
+        const parsed = parseVoiceTransactionCommand(spoken, data.accounts, data.categories);
+        if (parsed) {
+          setTxType(parsed.type);
+          if (parsed.amount > 0) {
+            setTxAmount(Number(parsed.amount).toLocaleString('es-CO'));
+          }
+          if (parsed.account) {
+            setTxAccount(parsed.account.id);
+          }
+          if (parsed.category) {
+            setTxCategoryId(parsed.category.id);
+            setTxCategoryName(parsed.category.name);
+            setTxCategoryIcon(parsed.category.icon || 'none');
+            setTxSubcategoryName(parsed.subcategory || '');
+          }
+          setTxNote(parsed.transcript);
+          setVoiceFeedbackText(
+            `Escuché: "${parsed.transcript}" — Revisa los campos rellenados y toca Guardar.`
+          );
+        }
+        setIsListeningVoice(false);
+        voiceRecognitionRef.current = null;
+      };
+
+      recognition.onerror = (err) => {
+        const errCode = err?.error || '';
+        if (errCode === 'not-allowed') {
+          setVoiceFeedbackText('Permiso de micrófono denegado. Actívalo en el navegador para usar voz.');
+        } else if (errCode === 'no-speech') {
+          setVoiceFeedbackText('No se escuchó voz. Toca el micrófono e inténtalo de nuevo.');
+        } else {
+          setVoiceFeedbackText('No se pudo completar el comando de voz. Intenta de nuevo.');
+        }
+        setIsListeningVoice(false);
+        voiceRecognitionRef.current = null;
+      };
+
+      recognition.onend = () => {
+        setIsListeningVoice(false);
+        voiceRecognitionRef.current = null;
+      };
+
+      recognition.start();
+    } catch {
+      setIsListeningVoice(false);
+      setVoiceFeedbackText('No se pudo iniciar el micrófono en este dispositivo.');
+    }
   };
 
   const selectedCategoryObject = useMemo(
@@ -1531,7 +1850,7 @@ export default function App() {
       return {
         ...prev,
         accounts: updatedAccounts,
-        transactions: [newTx, ...prev.transactions],
+        transactions: [newTx, ...prev.transactions].slice(0, 100),
       };
     });
 
@@ -3352,35 +3671,20 @@ endstream`;
                   : txTime >= startOfMonth;
               });
 
-              const getCategoriesForType = (typeFilter) => {
-                const set = new Set();
-                data.categories.forEach((c) => {
-                  if (c && c.name) set.add(c.name);
-                });
-                periodTx.forEach((t) => {
-                  if (t.type === typeFilter && t.categoryName) set.add(t.categoryName);
-                });
-                return Array.from(set);
+              const activeCategoryNames = new Set(
+                data.categories.filter((c) => c && c.name).map((c) => c.name)
+              );
+
+              const getCategoriesForType = () => {
+                return data.categories
+                  .filter((c) => c && c.name)
+                  .map((c) => c.name);
               };
 
-              const getSubcategoriesForCat = (catName, typeFilter) => {
-                const set = new Set();
-                const catObj = data.categories.find((c) => c.name === catName);
-                if (catObj && Array.isArray(catObj.subcategories)) {
-                  catObj.subcategories.forEach((s) => {
-                    if (s) set.add(s);
-                  });
-                }
-                periodTx.forEach((t) => {
-                  if (
-                    t.type === typeFilter &&
-                    t.categoryName === catName &&
-                    t.subcategoryName
-                  ) {
-                    set.add(t.subcategoryName);
-                  }
-                });
-                return Array.from(set);
+              const getSubcategoriesForCat = (catName) => {
+                const catObj = data.categories.find((c) => c && c.name === catName);
+                if (!catObj || !Array.isArray(catObj.subcategories)) return [];
+                return catObj.subcategories.filter((s) => typeof s === 'string' && s.trim());
               };
 
               const calcCustomTotal = (typeFilter, catName, subName) => {
@@ -3393,26 +3697,31 @@ endstream`;
                 }, 0);
               };
 
-              const catsA = getCategoriesForType(cmpAType);
-              const subsA = cmpACategory ? getSubcategoriesForCat(cmpACategory, cmpAType) : [];
-              const catsB = getCategoriesForType(cmpBType);
-              const subsB = cmpBCategory ? getSubcategoriesForCat(cmpBCategory, cmpBType) : [];
+              const catsA = getCategoriesForType();
+              const validCatA = cmpACategory && activeCategoryNames.has(cmpACategory) ? cmpACategory : '';
+              const subsA = validCatA ? getSubcategoriesForCat(validCatA) : [];
+              const validSubA = validCatA && cmpASubcategory && subsA.includes(cmpASubcategory) ? cmpASubcategory : '';
 
-              const totalA = calcCustomTotal(cmpAType, cmpACategory, cmpASubcategory);
-              const totalB = calcCustomTotal(cmpBType, cmpBCategory, cmpBSubcategory);
+              const catsB = getCategoriesForType();
+              const validCatB = cmpBCategory && activeCategoryNames.has(cmpBCategory) ? cmpBCategory : '';
+              const subsB = validCatB ? getSubcategoriesForCat(validCatB) : [];
+              const validSubB = validCatB && cmpBSubcategory && subsB.includes(cmpBSubcategory) ? cmpBSubcategory : '';
+
+              const totalA = calcCustomTotal(cmpAType, validCatA, validSubA);
+              const totalB = calcCustomTotal(cmpBType, validCatB, validSubB);
               const customDenom = Math.max(totalA + totalB, 1);
 
-              const labelA = cmpACategory
-                ? `${cmpACategory}${cmpASubcategory ? ` • ${cmpASubcategory}` : ''}`
+              const labelA = validCatA
+                ? `${validCatA}${validSubA ? ` • ${validSubA}` : ''}`
                 : 'Elemento 1 sin elegir';
-              const labelB = cmpBCategory
-                ? `${cmpBCategory}${cmpBSubcategory ? ` • ${cmpBSubcategory}` : ''}`
+              const labelB = validCatB
+                ? `${validCatB}${validSubB ? ` • ${validSubB}` : ''}`
                 : 'Elemento 2 sin elegir';
 
               const colorA = cmpAType === 'ingreso' ? theme.success : theme.danger;
               const colorB = cmpBType === 'ingreso' ? theme.success : theme.danger;
               const isCompareOpen = !!openStats.compararCat;
-              const hasAnyCompareSelection = Boolean(cmpACategory || cmpBCategory || cmpASubcategory || cmpBSubcategory);
+              const hasAnyCompareSelection = Boolean(validCatA || validCatB || validSubA || validSubB);
 
               const handleResetComparator = () => {
                 setCmpAType('ingreso');
@@ -3595,9 +3904,9 @@ endstream`;
                           'Elemento 1',
                           cmpAType,
                           setCmpAType,
-                          cmpACategory,
+                          validCatA,
                           setCmpACategory,
-                          cmpASubcategory,
+                          validSubA,
                           setCmpASubcategory,
                           catsA,
                           subsA
@@ -3607,9 +3916,9 @@ endstream`;
                           'Elemento 2',
                           cmpBType,
                           setCmpBType,
-                          cmpBCategory,
+                          validCatB,
                           setCmpBCategory,
-                          cmpBSubcategory,
+                          validSubB,
                           setCmpBSubcategory,
                           catsB,
                           subsB
@@ -3637,7 +3946,7 @@ endstream`;
                             <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.inputBg, overflow: 'hidden' }}>
                               <div
                                 style={{
-                                  width: `${cmpACategory ? Math.round((totalA / customDenom) * 100) : 0}%`,
+                                  width: `${validCatA ? Math.round((totalA / customDenom) * 100) : 0}%`,
                                   height: '100%',
                                   backgroundColor: colorA,
                                   borderRadius: '999px',
@@ -3657,7 +3966,7 @@ endstream`;
                             <div style={{ height: '12px', borderRadius: '999px', backgroundColor: theme.inputBg, overflow: 'hidden' }}>
                               <div
                                 style={{
-                                  width: `${cmpBCategory ? Math.round((totalB / customDenom) * 100) : 0}%`,
+                                  width: `${validCatB ? Math.round((totalB / customDenom) * 100) : 0}%`,
                                   height: '100%',
                                   backgroundColor: colorB,
                                   borderRadius: '999px',
@@ -7088,7 +7397,7 @@ endstream`;
               <span style={{ fontSize: '16px', fontWeight: 700 }}>Registrar movimiento</span>
               <button
                 type="button"
-                onClick={() => setShowTxModal(false)}
+                onClick={closeTransactionModal}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -7099,6 +7408,91 @@ endstream`;
               >
                 ✕
               </button>
+            </div>
+
+            {/* Atajos rápidos: Comando de voz y Repetir último movimiento al instante */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: lastRepeatableTransaction ? '1fr 1.25fr' : '1fr',
+                  gap: '7px',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleToggleVoiceCommand}
+                  style={{
+                    padding: '9px 10px',
+                    borderRadius: '11px',
+                    border: `1.5px solid ${isListeningVoice ? theme.danger : theme.accentBlue}`,
+                    backgroundColor: isListeningVoice ? theme.dangerBg : theme.accentBlueSoft,
+                    color: isListeningVoice ? theme.danger : theme.accentBlueText,
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
+                  <span>{isListeningVoice ? 'Detener voz' : 'Por voz'}</span>
+                </button>
+
+                {lastRepeatableTransaction && (
+                  <button
+                    type="button"
+                    onClick={handleRepeatLastTransactionInstant}
+                    title="Registrar exactamente el último movimiento de una"
+                    style={{
+                      padding: '9px 10px',
+                      borderRadius: '11px',
+                      border: `1.5px solid ${
+                        lastRepeatableTransaction.type === 'ingreso' ? theme.success : theme.warning
+                      }`,
+                      backgroundColor:
+                        lastRepeatableTransaction.type === 'ingreso' ? theme.successBg : theme.warningBg,
+                      color:
+                        lastRepeatableTransaction.type === 'ingreso' ? theme.success : theme.warning,
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    ↻ Repetir último ({lastRepeatableTransaction.type === 'ingreso' ? '+' : '-'}
+                    {formatMoneyByCurrency(lastRepeatableTransaction.amount, currency)} •{' '}
+                    {lastRepeatableTransaction.subcategoryName || lastRepeatableTransaction.categoryName})
+                  </button>
+                )}
+              </div>
+
+              {voiceFeedbackText && (
+                <div
+                  style={{
+                    backgroundColor: isListeningVoice ? theme.dangerBg : theme.accentBlueSoft,
+                    border: `1px solid ${isListeningVoice ? theme.danger : theme.accentBlue}`,
+                    color: isListeningVoice ? theme.danger : theme.accentBlueText,
+                    borderRadius: '10px',
+                    padding: '8px 10px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {voiceFeedbackText}
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
