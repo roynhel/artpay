@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.1.1';
+const APP_VERSION = 'v1.1.2';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -1722,12 +1722,20 @@ export default function App() {
 
   const stopVoiceListening = useCallback(() => {
     if (voiceRecognitionRef.current) {
-      try {
-        voiceRecognitionRef.current.stop();
-      } catch {
-        // Ignorar si ya estaba detenido
-      }
+      const rec = voiceRecognitionRef.current;
       voiceRecognitionRef.current = null;
+      try {
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        if (typeof rec.abort === 'function') {
+          rec.abort();
+        } else if (typeof rec.stop === 'function') {
+          rec.stop();
+        }
+      } catch {
+        // Ignorar si ya estaba detenido o abortado
+      }
     }
     setIsListeningVoice(false);
   }, []);
@@ -1883,13 +1891,16 @@ export default function App() {
 
   const handleToggleVoiceCommand = () => {
     if (isListeningVoice) {
-      if (voiceTranscriptBufferRef.current.trim()) {
-        applyParsedVoicePhrase(voiceTranscriptBufferRef.current.trim());
-      }
+      const captured = voiceTranscriptBufferRef.current.trim();
       stopVoiceListening();
+      if (captured) {
+        applyParsedVoicePhrase(captured);
+      }
       return;
     }
 
+    // Limpiar por completo cualquier instancia anterior antes de iniciar una nueva en PWA/Safari
+    stopVoiceListening();
     setTxError('');
     setShowRepeatConfirmBox(false);
     voiceTranscriptBufferRef.current = '';
@@ -1902,7 +1913,7 @@ export default function App() {
     if (!SpeechRec) {
       setShowVoiceFallbackInput(true);
       setVoiceFeedbackText(
-        'En este modo de Safari el micrófono web directo no está habilitado. Toca el cuadro de abajo y usa el micrófono del teclado de tu iPhone:'
+        'En este modo de pantalla de inicio el micrófono web directo no está disponible. Toca el cuadro de abajo y usa el micrófono del teclado de tu iPhone:'
       );
       return;
     }
@@ -1919,7 +1930,10 @@ export default function App() {
       setShowVoiceFallbackInput(false);
       setVoiceFeedbackText('Escuchando... Habla ahora (ej: "Gané 20.000 pesos por una carrera en inDrive y me pagaron en Bancolombia")');
 
+      let appliedAlready = false;
+
       recognition.onresult = (event) => {
+        if (voiceRecognitionRef.current !== recognition) return;
         let fullTranscript = '';
         let hasFinal = false;
         for (let i = 0; i < event.results.length; i += 1) {
@@ -1930,52 +1944,59 @@ export default function App() {
         if (cleaned) {
           voiceTranscriptBufferRef.current = cleaned;
           setVoiceFeedbackText(`Escuchando: "${cleaned}"`);
-          if (hasFinal) {
+          if (hasFinal && !appliedAlready) {
+            appliedAlready = true;
             applyParsedVoicePhrase(cleaned);
+            stopVoiceListening();
           }
         }
       };
 
       recognition.onerror = (err) => {
+        if (voiceRecognitionRef.current !== recognition) return;
         const errCode = err?.error || '';
-        if (voiceTranscriptBufferRef.current.trim()) {
-          applyParsedVoicePhrase(voiceTranscriptBufferRef.current.trim());
-          setIsListeningVoice(false);
-          voiceRecognitionRef.current = null;
+        const pendingPhrase = voiceTranscriptBufferRef.current.trim();
+        stopVoiceListening();
+
+        if (pendingPhrase && !appliedAlready) {
+          appliedAlready = true;
+          applyParsedVoicePhrase(pendingPhrase);
           return;
         }
+
         setShowVoiceFallbackInput(true);
         if (errCode === 'not-allowed' || errCode === 'service-not-allowed') {
           setVoiceFeedbackText(
-            'Safari bloqueó el micrófono directo. Usa el cuadro de abajo con el micrófono de tu teclado iPhone:'
+            'En pantalla de inicio Safari bloqueó el micrófono directo en este intento. Dicta con el micrófono del teclado abajo:'
           );
         } else if (errCode === 'no-speech') {
           setVoiceFeedbackText(
-            'No se detectó voz. Intenta de nuevo o dicta usando el micrófono del teclado abajo:'
+            'No se escuchó voz. Vuelve a tocar "Por voz" o dicta con el micrófono del teclado abajo:'
           );
         } else {
           setVoiceFeedbackText(
-            'Safari no completó el audio directo. Usa el micrófono de tu teclado en el cuadro de abajo:'
+            'Safari no completó el audio directo en este intento. Dicta con el micrófono del teclado abajo:'
           );
         }
-        setIsListeningVoice(false);
-        voiceRecognitionRef.current = null;
       };
 
       recognition.onend = () => {
-        if (voiceTranscriptBufferRef.current.trim()) {
-          applyParsedVoicePhrase(voiceTranscriptBufferRef.current.trim());
-        }
-        setIsListeningVoice(false);
+        const pendingPhrase = voiceTranscriptBufferRef.current.trim();
+        const wasActiveInstance = voiceRecognitionRef.current === recognition;
         voiceRecognitionRef.current = null;
+        setIsListeningVoice(false);
+        if (wasActiveInstance && pendingPhrase && !appliedAlready) {
+          appliedAlready = true;
+          applyParsedVoicePhrase(pendingPhrase);
+        }
       };
 
       recognition.start();
     } catch {
-      setIsListeningVoice(false);
+      stopVoiceListening();
       setShowVoiceFallbackInput(true);
       setVoiceFeedbackText(
-        'Safari no permitió iniciar el micrófono directo. Toca el cuadro de abajo y dicta con el micrófono del teclado:'
+        'No se pudo iniciar el micrófono directo en este intento. Toca el cuadro de abajo y dicta con el micrófono del teclado:'
       );
     }
   };
