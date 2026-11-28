@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.1.2';
+const APP_VERSION = 'v1.1.3';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -512,44 +512,136 @@ const matchesSpokenLabel = (normSpeech, speechCompact, targetName) => {
   return false;
 };
 
+const extractVoiceDescriptionNote = (rawTranscript) => {
+  const original = String(rawTranscript || '').trim();
+  if (!original) return '';
+
+  // Busca frases como: "y en la descripción pon que ...", "en la descripción pon ...", "en la descripcion pon ...", "pon en la descripción ..."
+  const match = original.match(
+    /(?:^|\s)(?:y\s+)?(?:en\s+la\s+descripci[oó]n\s+pon(?:\s+que)?|en\s+descripci[oó]n\s+pon(?:\s+que)?|pon\s+en\s+la\s+descripci[oó]n(?:\s+que)?|en\s+la\s+nota\s+pon(?:\s+que)?|pon\s+en\s+la\s+nota(?:\s+que)?)\s+(.+)$/i
+  );
+
+  if (match && match[1]) {
+    return match[1].trim().replace(/[.]+$/, '').trim();
+  }
+
+  // Si no se pidió explícitamente "en la descripción pon...", se deja vacía para no guardar todo literalmente
+  return '';
+};
+
 const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
   const original = String(rawTranscript || '').trim();
   const norm = normalizeSearchText(original);
   if (!norm) return null;
   const speechCompact = norm.replace(/\s+/g, '');
 
-  // 1. Detectar tipo (ingreso vs gasto)
+  // 1. Detectar tipo (ingreso vs gasto) con múltiples expresiones cotidianas
   let detectedType = 'gasto';
-  const incomeKeywords = [
+
+  const strongIncomePhrases = [
+    'me mando',
+    'me mandaron',
+    'me envio',
+    'me enviaron',
+    'me giro',
+    'me giraron',
+    'me transfirio',
+    'me transfirieron',
+    'me pago',
+    'me pagaron',
+    'me dio',
+    'me dieron',
+    'me presto',
+    'me prestaron',
+    'me devolvio',
+    'me devolvieron',
+    'me entro',
+    'me entraron',
+    'me llego',
+    'me llegaron',
+    'me cayo',
+    'me cayeron',
+    'me abone',
+    'me abonaron',
+    'me consigno',
+    'me consignaron',
+  ];
+
+  const strongExpensePhrases = [
+    'le mande',
+    'le mandamos',
+    'le envie',
+    'le enviamos',
+    'le gire',
+    'le pague',
+    'le transferi',
+    'le di',
+    'le preste',
+    'le abone',
+    'le consigne',
+    'a mi novia',
+    'a mi novio',
+    'a mi mama',
+    'a mi papa',
+    'a mi hermano',
+    'a mi hermana',
+    'a mi amigo',
+    'a mi amiga',
+    'a mi primo',
+    'a mi prima',
+    'le debo',
+  ];
+
+  const incomeWords = [
     'ingreso',
     'ingrese',
     'ingresaron',
-    'me pagaron',
-    'me pago',
-    'me entraron',
-    'me entro',
     'gane',
+    'gano',
     'ganancia',
     'recibi',
+    'recibo',
     'cobre',
+    'cobro',
     'carrera',
     'servicio',
+    'propina',
+    'reembolso',
+    'devolucion',
+    'sueldo',
+    'quincena',
+    'pago',
   ];
-  const expenseKeywords = [
+
+  const expenseWords = [
     'gasto',
     'gaste',
+    'gastar',
     'pague',
+    'pagar',
     'compre',
+    'comprar',
     'se fueron',
     'se fue',
     'eche',
     'tanquee',
     'abone',
+    'consumi',
+    'almuerce',
+    'desayune',
+    'cene',
   ];
 
-  if (incomeKeywords.some((kw) => norm.includes(kw))) {
+  const hasStrongIncome = strongIncomePhrases.some((p) => norm.includes(p));
+  const hasStrongExpense = strongExpensePhrases.some((p) => norm.includes(p));
+
+  if (hasStrongIncome && !hasStrongExpense) {
     detectedType = 'ingreso';
-  } else if (expenseKeywords.some((kw) => norm.includes(kw))) {
+  } else if (hasStrongExpense && !hasStrongIncome) {
+    detectedType = 'gasto';
+  } else if (incomeWords.some((kw) => new RegExp(`\b${kw}\b`).test(norm))) {
+    detectedType = 'ingreso';
+  } else if (expenseWords.some((kw) => new RegExp(`\b${kw}\b`).test(norm))) {
     detectedType = 'gasto';
   }
 
@@ -569,7 +661,6 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
       detectedAmount = Math.round(numVal * 1000);
     }
   } else {
-    // Capturar dígitos con puntos, comas o espacios de miles (ej: "20.000" o "20 000")
     const spacedThousandMatch = original.match(/\b(\d{1,3}(?:[.,\s]\d{3})+)\b/);
     if (spacedThousandMatch) {
       detectedAmount = parseMoneyInput(spacedThousandMatch[1]);
@@ -611,7 +702,6 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     (a, b) => normalizeSearchText(b.name).length - normalizeSearchText(a.name).length
   );
 
-  // Primero buscar coincidencia en subcategorías (porque identifica también su categoría padre)
   for (let i = 0; i < sortedCategories.length; i += 1) {
     const cat = sortedCategories[i];
     const subs = Array.isArray(cat.subcategories) ? cat.subcategories : [];
@@ -629,7 +719,6 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     if (matchedCategory) break;
   }
 
-  // Si no coincidió ninguna subcategoría, buscar coincidencia por nombre de categoría
   if (!matchedCategory) {
     for (let i = 0; i < sortedCategories.length; i += 1) {
       const cat = sortedCategories[i];
@@ -642,6 +731,7 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
 
   return {
     transcript: original,
+    note: extractVoiceDescriptionNote(original),
     type: detectedType,
     amount: detectedAmount,
     account: matchedAccount,
@@ -1791,7 +1881,7 @@ export default function App() {
         setTxCategoryIcon(parsed.category.icon || 'none');
         setTxSubcategoryName(parsed.subcategory || '');
       }
-      setTxNote(parsed.transcript);
+      setTxNote(parsed.note || '');
 
       const summaryParts = [
         parsed.type === 'ingreso' ? 'Ingreso' : 'Gasto',
@@ -1993,7 +2083,8 @@ export default function App() {
 
       recognition.start();
     } catch {
-      stopVoiceListening();
+      voiceRecognitionRef.current = null;
+      setIsListeningVoice(false);
       setShowVoiceFallbackInput(true);
       setVoiceFeedbackText(
         'No se pudo iniciar el micrófono directo en este intento. Toca el cuadro de abajo y dicta con el micrófono del teclado:'
