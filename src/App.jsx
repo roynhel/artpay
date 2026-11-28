@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.1.3';
+const APP_VERSION = 'v1.1.4';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -478,54 +478,108 @@ const spanishWordsToNumber = (normText) => {
   return foundAny ? total + current : 0;
 };
 
-const matchesSpokenLabel = (normSpeech, speechCompact, targetName) => {
+// Normalización fonética genérica (sin nombres de marcas preestablecidos) para comparar lo dictado contra cualquier cuenta, categoría o subcategoría del usuario
+const phoneticKey = (str) =>
+  normalizeSearchText(str)
+    .replace(/qu/g, 'k')
+    .replace(/c([ei])/g, 's$1')
+    .replace(/c/g, 'k')
+    .replace(/z/g, 's')
+    .replace(/v/g, 'b')
+    .replace(/y/g, 'i')
+    .replace(/ll/g, 'i')
+    .replace(/h/g, '')
+    .replace(/e/g, 'i') // Permite que dictados como "Nike" / "Neki" / "Nequi" o "inDrive" / "Indriver" coincidan dinámicamente con la etiqueta creada por el usuario
+    .replace(/(.)\1+/g, '$1');
+
+const levenshteinDistance = (a, b) => {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = Array.from({ length: b.length + 1 }, (_, idx) => idx);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const temp = prev[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + cost);
+      diag = temp;
+    }
+  }
+  return prev[b.length];
+};
+
+// Devuelve puntaje de coincidencia (> 0 si coincide) evaluando únicamente contra los nombres reales creados por cada usuario
+const scoreSpokenMatch = (normSpeech, speechTokens, targetName) => {
   const targetNorm = normalizeSearchText(targetName);
-  if (!targetNorm) return false;
-  if (normSpeech.includes(targetNorm)) return true;
+  if (!targetNorm) return 0;
+
+  // 1. Coincidencia exacta de frase o palabra
+  if (normSpeech.includes(targetNorm)) {
+    return 100 + targetNorm.length;
+  }
 
   const targetCompact = targetNorm.replace(/\s+/g, '');
-  if (targetCompact.length >= 4 && speechCompact.includes(targetCompact)) return true;
+  const speechCompact = normSpeech.replace(/\s+/g, '');
+  if (targetCompact.length >= 4 && speechCompact.includes(targetCompact)) {
+    return 95 + targetCompact.length;
+  }
 
-  // Variantes comunes en dictado español/inglés (ej: indriver <-> indrive, didi, nequi, bancolombia)
-  const aliases = {
-    indrive: ['indriver', 'in driver', 'in drive', 'endriver', 'endrive'],
-    indriver: ['indrive', 'in drive', 'in driver', 'endriver'],
-    didi: ['di di', 'diddy'],
-    nequi: ['neki', 'neky'],
-    bancolombia: ['banco colombia', 'ban colombia'],
-  };
+  // 2. Comparación fonética y por similitud de letras contra ventanas de palabras dictadas
+  const targetPhon = phoneticKey(targetCompact);
+  const targetWordCount = targetNorm.split(' ').length;
 
-  const altList = aliases[targetCompact] || [];
-  for (let i = 0; i < altList.length; i += 1) {
-    const altNorm = normalizeSearchText(altList[i]);
-    if (normSpeech.includes(altNorm) || speechCompact.includes(altNorm.replace(/\s+/g, ''))) {
-      return true;
+  let bestScore = 0;
+  for (let i = 0; i < speechTokens.length; i += 1) {
+    const windowSlice = speechTokens.slice(i, i + targetWordCount).join('');
+    if (!windowSlice) continue;
+    const windowPhon = phoneticKey(windowSlice);
+
+    if (targetPhon.length >= 4 && windowPhon === targetPhon) {
+      bestScore = Math.max(bestScore, 88 + targetCompact.length);
+      continue;
+    }
+
+    // Raíz compartida en palabras compuestas o variaciones de sufijo (ej. singular/plural o terminación)
+    if (targetPhon.length >= 5 && windowPhon.length >= 5) {
+      const minLen = Math.min(targetPhon.length, windowPhon.length);
+      if (targetPhon.slice(0, minLen) === windowPhon.slice(0, minLen) && Math.abs(targetPhon.length - windowPhon.length) <= 2) {
+        bestScore = Math.max(bestScore, 80 + minLen);
+      }
+    }
+
+    const maxAllowedDist = targetPhon.length >= 7 ? 2 : targetPhon.length >= 4 ? 1 : 0;
+    if (maxAllowedDist > 0) {
+      const dist = levenshteinDistance(targetPhon, windowPhon);
+      if (dist <= maxAllowedDist) {
+        bestScore = Math.max(bestScore, 75 - dist * 10 + targetCompact.length);
+      }
     }
   }
 
-  // Coincidencia por raíz de al menos 6 letras (ej: "indriver" comparte "indriv" con "indrive")
-  if (targetCompact.length >= 6) {
-    const stem = targetCompact.slice(0, 6);
-    if (speechCompact.includes(stem)) return true;
-  }
-
-  return false;
+  return bestScore;
 };
 
 const extractVoiceDescriptionNote = (rawTranscript) => {
   const original = String(rawTranscript || '').trim();
   if (!original) return '';
 
-  // Busca frases como: "y en la descripción pon que ...", "en la descripción pon ...", "en la descripcion pon ...", "pon en la descripción ..."
-  const match = original.match(
-    /(?:^|\s)(?:y\s+)?(?:en\s+la\s+descripci[oó]n\s+pon(?:\s+que)?|en\s+descripci[oó]n\s+pon(?:\s+que)?|pon\s+en\s+la\s+descripci[oó]n(?:\s+que)?|en\s+la\s+nota\s+pon(?:\s+que)?|pon\s+en\s+la\s+nota(?:\s+que)?)\s+(.+)$/i
-  );
+  // Soporta múltiples formas naturales de dictar la descripción o nota al final o en medio:
+  // "y en la descripción pon que ...", "descripción: ...", "con descripción ...", "nota: ...", "con nota ...", "pon de descripción ..."
+  const patterns = [
+    /(?:^|[\s,;])(?:y\s+)?(?:en\s+la\s+|en\s+|de\s+|con\s+)?(?:descripci[oó]n|nota|detalle|concepto)\s*(?:pon(?:\s+que)?|dice|que\s+diga|es|:)?\s+(.+)$/i,
+    /(?:^|[\s,;])(?:y\s+)?pon(?:\s+en\s+la\s+|\s+en\s+|\s+de\s+)?(?:descripci[oó]n|nota)(?:\s+que)?\s+(.+)$/i,
+  ];
 
-  if (match && match[1]) {
-    return match[1].trim().replace(/[.]+$/, '').trim();
+  for (let i = 0; i < patterns.length; i += 1) {
+    const m = original.match(patterns[i]);
+    if (m && m[1]) {
+      const cleaned = m[1].trim().replace(/^[:"'«»]+|[."']+$/g, '').trim();
+      if (cleaned) return cleaned;
+    }
   }
 
-  // Si no se pidió explícitamente "en la descripción pon...", se deja vacía para no guardar todo literalmente
   return '';
 };
 
@@ -533,9 +587,16 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
   const original = String(rawTranscript || '').trim();
   const norm = normalizeSearchText(original);
   if (!norm) return null;
-  const speechCompact = norm.replace(/\s+/g, '');
 
-  // 1. Detectar tipo (ingreso vs gasto) con múltiples expresiones cotidianas
+  // Separar la parte principal de la instrucción de descripción para que palabras dentro de la descripción no alteren categoría/monto/tipo
+  const mainBodyMatch = original.match(
+    /^(.*?)(?:[\s,;]+(?:y\s+)?(?:(?:en\s+la\s+|en\s+|de\s+|con\s+)?(?:descripci[oó]n|nota|detalle|concepto)|pon\s+(?:en\s+la\s+|en\s+|de\s+)?(?:descripci[oó]n|nota))\b.*)$/i
+  );
+  const commandPartRaw = mainBodyMatch && mainBodyMatch[1].trim() ? mainBodyMatch[1].trim() : original;
+  const commandNorm = normalizeSearchText(commandPartRaw);
+  const commandTokens = commandNorm.split(' ').filter(Boolean);
+
+  // 1. Detectar tipo (ingreso vs gasto) de forma genérica
   let detectedType = 'gasto';
 
   const strongIncomePhrases = [
@@ -579,16 +640,6 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     'le preste',
     'le abone',
     'le consigne',
-    'a mi novia',
-    'a mi novio',
-    'a mi mama',
-    'a mi papa',
-    'a mi hermano',
-    'a mi hermana',
-    'a mi amigo',
-    'a mi amiga',
-    'a mi primo',
-    'a mi prima',
     'le debo',
   ];
 
@@ -603,14 +654,11 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     'recibo',
     'cobre',
     'cobro',
-    'carrera',
-    'servicio',
     'propina',
     'reembolso',
     'devolucion',
     'sueldo',
     'quincena',
-    'pago',
   ];
 
   const expenseWords = [
@@ -632,23 +680,23 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     'cene',
   ];
 
-  const hasStrongIncome = strongIncomePhrases.some((p) => norm.includes(p));
-  const hasStrongExpense = strongExpensePhrases.some((p) => norm.includes(p));
+  const hasStrongIncome = strongIncomePhrases.some((p) => commandNorm.includes(p));
+  const hasStrongExpense = strongExpensePhrases.some((p) => commandNorm.includes(p));
 
   if (hasStrongIncome && !hasStrongExpense) {
     detectedType = 'ingreso';
   } else if (hasStrongExpense && !hasStrongIncome) {
     detectedType = 'gasto';
-  } else if (incomeWords.some((kw) => new RegExp(`\b${kw}\b`).test(norm))) {
+  } else if (incomeWords.some((kw) => new RegExp(`\b${kw}\b`).test(commandNorm))) {
     detectedType = 'ingreso';
-  } else if (expenseWords.some((kw) => new RegExp(`\b${kw}\b`).test(norm))) {
+  } else if (expenseWords.some((kw) => new RegExp(`\b${kw}\b`).test(commandNorm))) {
     detectedType = 'gasto';
   }
 
   // 2. Detectar monto (soporta "20.000 pesos", "25 000", "25 mil", "50 barras", "veinte mil", "2 millones")
   let detectedAmount = 0;
-  const millionMatch = norm.match(/(\d+(?:[.,]\d+)?)\s*(?:millon|millones|palo|palos)\b/);
-  const thousandMatch = norm.match(/(\d+(?:[.,]\d+)?)\s*(?:mil|barras|lucas)\b/);
+  const millionMatch = commandNorm.match(/(\d+(?:[.,]\d+)?)\s*(?:millon|millones|palo|palos)\b/);
+  const thousandMatch = commandNorm.match(/(\d+(?:[.,]\d+)?)\s*(?:mil|barras|lucas)\b/);
 
   if (millionMatch) {
     const numVal = parseFloat(millionMatch[1].replace(',', '.'));
@@ -661,11 +709,11 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
       detectedAmount = Math.round(numVal * 1000);
     }
   } else {
-    const spacedThousandMatch = original.match(/\b(\d{1,3}(?:[.,\s]\d{3})+)\b/);
+    const spacedThousandMatch = commandPartRaw.match(/\b(\d{1,3}(?:[.,\s]\d{3})+)\b/);
     if (spacedThousandMatch) {
       detectedAmount = parseMoneyInput(spacedThousandMatch[1]);
     } else {
-      const rawNumberMatches = original.match(/\d[\d.,]*/g);
+      const rawNumberMatches = commandPartRaw.match(/\d[\d.,]*/g);
       if (rawNumberMatches && rawNumberMatches.length > 0) {
         const candidates = rawNumberMatches
           .map((m) => parseMoneyInput(m))
@@ -678,53 +726,49 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
   }
 
   if (!detectedAmount || detectedAmount <= 0) {
-    detectedAmount = spanishWordsToNumber(norm);
+    detectedAmount = spanishWordsToNumber(commandNorm);
   }
 
-  // 3. Detectar cuenta coincidente
+  // 3. Detectar cuenta coincidente entre las cuentas que el usuario haya creado
   let matchedAccount = null;
-  const sortedAccounts = [...(accounts || [])].sort(
-    (a, b) => normalizeSearchText(b.name).length - normalizeSearchText(a.name).length
-  );
-  for (let i = 0; i < sortedAccounts.length; i += 1) {
-    const acc = sortedAccounts[i];
-    if (matchesSpokenLabel(norm, speechCompact, acc.name)) {
+  let bestAccountScore = 0;
+  for (let i = 0; i < (accounts || []).length; i += 1) {
+    const acc = accounts[i];
+    const sc = scoreSpokenMatch(commandNorm, commandTokens, acc.name);
+    if (sc > bestAccountScore) {
+      bestAccountScore = sc;
       matchedAccount = acc;
-      break;
     }
   }
 
-  // 4. Detectar categoría y subcategoría coincidente
+  // 4. Detectar categoría y subcategoría dinámicamente desde las que el usuario tenga configuradas
   let matchedCategory = null;
   let matchedSubcategory = '';
+  let bestSubScore = 0;
 
-  const sortedCategories = [...(categories || [])].sort(
-    (a, b) => normalizeSearchText(b.name).length - normalizeSearchText(a.name).length
-  );
-
-  for (let i = 0; i < sortedCategories.length; i += 1) {
-    const cat = sortedCategories[i];
+  for (let i = 0; i < (categories || []).length; i += 1) {
+    const cat = categories[i];
     const subs = Array.isArray(cat.subcategories) ? cat.subcategories : [];
-    const sortedSubs = [...subs].sort(
-      (a, b) => normalizeSearchText(b).length - normalizeSearchText(a).length
-    );
-    for (let j = 0; j < sortedSubs.length; j += 1) {
-      const sub = sortedSubs[j];
-      if (matchesSpokenLabel(norm, speechCompact, sub)) {
+    for (let j = 0; j < subs.length; j += 1) {
+      const sub = subs[j];
+      const sc = scoreSpokenMatch(commandNorm, commandTokens, sub);
+      if (sc > bestSubScore) {
+        bestSubScore = sc;
         matchedCategory = cat;
         matchedSubcategory = sub;
-        break;
       }
     }
-    if (matchedCategory) break;
   }
 
+  // Si no coincidió ninguna subcategoría, buscar coincidencia por nombre de categoría creada por el usuario
   if (!matchedCategory) {
-    for (let i = 0; i < sortedCategories.length; i += 1) {
-      const cat = sortedCategories[i];
-      if (matchesSpokenLabel(norm, speechCompact, cat.name)) {
+    let bestCatScore = 0;
+    for (let i = 0; i < (categories || []).length; i += 1) {
+      const cat = categories[i];
+      const sc = scoreSpokenMatch(commandNorm, commandTokens, cat.name);
+      if (sc > bestCatScore) {
+        bestCatScore = sc;
         matchedCategory = cat;
-        break;
       }
     }
   }
@@ -1893,7 +1937,7 @@ export default function App() {
       ].filter(Boolean);
 
       setVoiceFeedbackText(
-        `Escuché: "${parsed.transcript}" → ${summaryParts.join(' • ')}. Verifica y toca Guardar.`
+        `Detectado: ${summaryParts.join(' • ')}. Verifica y toca Guardar.`
       );
     },
     [data.accounts, data.categories, currency]
@@ -2037,7 +2081,11 @@ export default function App() {
           if (hasFinal && !appliedAlready) {
             appliedAlready = true;
             applyParsedVoicePhrase(cleaned);
-            stopVoiceListening();
+            try {
+              recognition.stop();
+            } catch {
+              stopVoiceListening();
+            }
           }
         }
       };
@@ -7892,11 +7940,11 @@ endstream`;
                 </div>
               )}
 
-              {showVoiceFallbackInput && (
+              {(showVoiceFallbackInput || voiceFeedbackText) && (
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <input
                     type="text"
-                    placeholder='Dicta aquí con el micrófono del teclado...'
+                    placeholder='O dicta aquí con el micrófono del teclado...'
                     value={voiceFallbackDraft}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -7907,27 +7955,27 @@ endstream`;
                     }}
                     style={{ ...baseInputStyle, fontSize: '12px', padding: '8px 10px', flex: 1 }}
                   />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (voiceFallbackDraft.trim()) {
-                        applyParsedVoicePhrase(voiceFallbackDraft);
-                      }
-                    }}
-                    style={{
-                      padding: '8px 11px',
-                      borderRadius: '9px',
-                      border: 'none',
-                      backgroundColor: theme.accentBlue,
-                      color: '#FFFFFF',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    Aplicar
-                  </button>
+                  {voiceFallbackDraft.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVoiceFallbackDraft('');
+                      }}
+                      title="Limpiar dictado"
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: '9px',
+                        border: `1px solid ${theme.border}`,
+                        backgroundColor: theme.inputBg,
+                        color: theme.textSecondary,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
               )}
             </div>
