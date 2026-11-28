@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-const APP_VERSION = 'v1.1.0';
+const APP_VERSION = 'v1.1.1';
 const STORAGE_KEY = 'artpay_persistent_data';
 const LEGACY_STORAGE_KEYS = [
   'artpay_data_v17',
@@ -378,16 +378,152 @@ const normalizeSearchText = (str) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const spanishWordsToNumber = (normText) => {
+  const units = {
+    un: 1,
+    uno: 1,
+    una: 1,
+    dos: 2,
+    tres: 3,
+    cuatro: 4,
+    cinco: 5,
+    seis: 6,
+    siete: 7,
+    ocho: 8,
+    nueve: 9,
+    diez: 10,
+    once: 11,
+    doce: 12,
+    trece: 13,
+    catorce: 14,
+    quince: 15,
+    dieciseis: 16,
+    diecisiete: 17,
+    dieciocho: 18,
+    diecinueve: 19,
+    veinte: 20,
+    veintiun: 21,
+    veintiuno: 21,
+    veintiuna: 21,
+    veintidos: 22,
+    veintitres: 23,
+    veinticuatro: 24,
+    veinticinco: 25,
+    veintiseis: 26,
+    veintisiete: 27,
+    veintiocho: 28,
+    veintinueve: 29,
+  };
+  const tens = {
+    treinta: 30,
+    cuarenta: 40,
+    cincuenta: 50,
+    sesenta: 60,
+    setenta: 70,
+    ochenta: 80,
+    noventa: 90,
+  };
+  const hundreds = {
+    cien: 100,
+    ciento: 100,
+    doscientos: 200,
+    doscientas: 200,
+    trescientos: 300,
+    trescientas: 300,
+    cuatrocientos: 400,
+    cuatrocientas: 400,
+    quinientos: 500,
+    quinientas: 500,
+    seiscientos: 600,
+    seiscientas: 600,
+    setecientos: 700,
+    setecientas: 700,
+    ochocientos: 800,
+    ochocientas: 800,
+    novecientos: 900,
+    novecientas: 900,
+  };
+
+  const tokens = normText.split(' ');
+  let total = 0;
+  let current = 0;
+  let foundAny = false;
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tk = tokens[i];
+    if (tk === 'y' && current > 0) continue;
+
+    if (Object.prototype.hasOwnProperty.call(units, tk)) {
+      current += units[tk];
+      foundAny = true;
+    } else if (Object.prototype.hasOwnProperty.call(tens, tk)) {
+      current += tens[tk];
+      foundAny = true;
+    } else if (Object.prototype.hasOwnProperty.call(hundreds, tk)) {
+      current += hundreds[tk];
+      foundAny = true;
+    } else if (tk === 'mil' || tk === 'barras' || tk === 'lucas') {
+      total += (current || 1) * 1000;
+      current = 0;
+      foundAny = true;
+    } else if (tk === 'millon' || tk === 'millones' || tk === 'palo' || tk === 'palos') {
+      total += (current || 1) * 1000000;
+      current = 0;
+      foundAny = true;
+    } else if (foundAny && (total > 0 || current > 0)) {
+      break;
+    }
+  }
+
+  return foundAny ? total + current : 0;
+};
+
+const matchesSpokenLabel = (normSpeech, speechCompact, targetName) => {
+  const targetNorm = normalizeSearchText(targetName);
+  if (!targetNorm) return false;
+  if (normSpeech.includes(targetNorm)) return true;
+
+  const targetCompact = targetNorm.replace(/\s+/g, '');
+  if (targetCompact.length >= 4 && speechCompact.includes(targetCompact)) return true;
+
+  // Variantes comunes en dictado español/inglés (ej: indriver <-> indrive, didi, nequi, bancolombia)
+  const aliases = {
+    indrive: ['indriver', 'in driver', 'in drive', 'endriver', 'endrive'],
+    indriver: ['indrive', 'in drive', 'in driver', 'endriver'],
+    didi: ['di di', 'diddy'],
+    nequi: ['neki', 'neky'],
+    bancolombia: ['banco colombia', 'ban colombia'],
+  };
+
+  const altList = aliases[targetCompact] || [];
+  for (let i = 0; i < altList.length; i += 1) {
+    const altNorm = normalizeSearchText(altList[i]);
+    if (normSpeech.includes(altNorm) || speechCompact.includes(altNorm.replace(/\s+/g, ''))) {
+      return true;
+    }
+  }
+
+  // Coincidencia por raíz de al menos 6 letras (ej: "indriver" comparte "indriv" con "indrive")
+  if (targetCompact.length >= 6) {
+    const stem = targetCompact.slice(0, 6);
+    if (speechCompact.includes(stem)) return true;
+  }
+
+  return false;
+};
+
 const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
   const original = String(rawTranscript || '').trim();
   const norm = normalizeSearchText(original);
   if (!norm) return null;
+  const speechCompact = norm.replace(/\s+/g, '');
 
   // 1. Detectar tipo (ingreso vs gasto)
   let detectedType = 'gasto';
   const incomeKeywords = [
     'ingreso',
     'ingrese',
+    'ingresaron',
     'me pagaron',
     'me pago',
     'me entraron',
@@ -417,7 +553,7 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     detectedType = 'gasto';
   }
 
-  // 2. Detectar monto (soporta "25 mil", "50 barras", "120.000", "2 millones", etc.)
+  // 2. Detectar monto (soporta "20.000 pesos", "25 000", "25 mil", "50 barras", "veinte mil", "2 millones")
   let detectedAmount = 0;
   const millionMatch = norm.match(/(\d+(?:[.,]\d+)?)\s*(?:millon|millones|palo|palos)\b/);
   const thousandMatch = norm.match(/(\d+(?:[.,]\d+)?)\s*(?:mil|barras|lucas)\b/);
@@ -433,15 +569,25 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
       detectedAmount = Math.round(numVal * 1000);
     }
   } else {
-    const rawNumberMatches = original.match(/\d[\d.,]*/g);
-    if (rawNumberMatches && rawNumberMatches.length > 0) {
-      const candidates = rawNumberMatches
-        .map((m) => parseMoneyInput(m))
-        .filter((n) => n > 0);
-      if (candidates.length > 0) {
-        detectedAmount = Math.max(...candidates);
+    // Capturar dígitos con puntos, comas o espacios de miles (ej: "20.000" o "20 000")
+    const spacedThousandMatch = original.match(/\b(\d{1,3}(?:[.,\s]\d{3})+)\b/);
+    if (spacedThousandMatch) {
+      detectedAmount = parseMoneyInput(spacedThousandMatch[1]);
+    } else {
+      const rawNumberMatches = original.match(/\d[\d.,]*/g);
+      if (rawNumberMatches && rawNumberMatches.length > 0) {
+        const candidates = rawNumberMatches
+          .map((m) => parseMoneyInput(m))
+          .filter((n) => n > 0);
+        if (candidates.length > 0) {
+          detectedAmount = Math.max(...candidates);
+        }
       }
     }
+  }
+
+  if (!detectedAmount || detectedAmount <= 0) {
+    detectedAmount = spanishWordsToNumber(norm);
   }
 
   // 3. Detectar cuenta coincidente
@@ -451,8 +597,7 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
   );
   for (let i = 0; i < sortedAccounts.length; i += 1) {
     const acc = sortedAccounts[i];
-    const accNorm = normalizeSearchText(acc.name);
-    if (accNorm && norm.includes(accNorm)) {
+    if (matchesSpokenLabel(norm, speechCompact, acc.name)) {
       matchedAccount = acc;
       break;
     }
@@ -466,7 +611,7 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     (a, b) => normalizeSearchText(b.name).length - normalizeSearchText(a.name).length
   );
 
-  // Primero buscar coincidencia exacta de subcategoría (porque identifica también su categoría padre)
+  // Primero buscar coincidencia en subcategorías (porque identifica también su categoría padre)
   for (let i = 0; i < sortedCategories.length; i += 1) {
     const cat = sortedCategories[i];
     const subs = Array.isArray(cat.subcategories) ? cat.subcategories : [];
@@ -475,8 +620,7 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
     );
     for (let j = 0; j < sortedSubs.length; j += 1) {
       const sub = sortedSubs[j];
-      const subNorm = normalizeSearchText(sub);
-      if (subNorm && norm.includes(subNorm)) {
+      if (matchesSpokenLabel(norm, speechCompact, sub)) {
         matchedCategory = cat;
         matchedSubcategory = sub;
         break;
@@ -489,8 +633,7 @@ const parseVoiceTransactionCommand = (rawTranscript, accounts, categories) => {
   if (!matchedCategory) {
     for (let i = 0; i < sortedCategories.length; i += 1) {
       const cat = sortedCategories[i];
-      const catNorm = normalizeSearchText(cat.name);
-      if (catNorm && norm.includes(catNorm)) {
+      if (matchesSpokenLabel(norm, speechCompact, cat.name)) {
         matchedCategory = cat;
         break;
       }
@@ -654,7 +797,11 @@ export default function App() {
   const [txError, setTxError] = useState('');
   const [isListeningVoice, setIsListeningVoice] = useState(false);
   const [voiceFeedbackText, setVoiceFeedbackText] = useState('');
+  const [showVoiceFallbackInput, setShowVoiceFallbackInput] = useState(false);
+  const [voiceFallbackDraft, setVoiceFallbackDraft] = useState('');
+  const [showRepeatConfirmBox, setShowRepeatConfirmBox] = useState(false);
   const voiceRecognitionRef = useRef(null);
+  const voiceTranscriptBufferRef = useRef('');
 
   // Secciones en Configuración: solo Perfil y moneda y Apariencia abiertas por defecto
   const [openSections, setOpenSections] = useState({
@@ -1588,6 +1735,9 @@ export default function App() {
   const closeTransactionModal = useCallback(() => {
     stopVoiceListening();
     setVoiceFeedbackText('');
+    setShowVoiceFallbackInput(false);
+    setVoiceFallbackDraft('');
+    setShowRepeatConfirmBox(false);
     setShowTxModal(false);
   }, [stopVoiceListening]);
 
@@ -1610,10 +1760,54 @@ export default function App() {
     setTxNote('');
     setTxError('');
     setVoiceFeedbackText('');
+    setShowVoiceFallbackInput(false);
+    setVoiceFallbackDraft('');
+    setShowRepeatConfirmBox(false);
     setShowTxModal(true);
   };
 
-  const handleRepeatLastTransactionInstant = () => {
+  const applyParsedVoicePhrase = useCallback(
+    (spokenPhrase) => {
+      const parsed = parseVoiceTransactionCommand(spokenPhrase, data.accounts, data.categories);
+      if (!parsed) return;
+      setTxType(parsed.type);
+      if (parsed.amount > 0) {
+        setTxAmount(Number(parsed.amount).toLocaleString('es-CO'));
+      }
+      if (parsed.account) {
+        setTxAccount(parsed.account.id);
+      }
+      if (parsed.category) {
+        setTxCategoryId(parsed.category.id);
+        setTxCategoryName(parsed.category.name);
+        setTxCategoryIcon(parsed.category.icon || 'none');
+        setTxSubcategoryName(parsed.subcategory || '');
+      }
+      setTxNote(parsed.transcript);
+
+      const summaryParts = [
+        parsed.type === 'ingreso' ? 'Ingreso' : 'Gasto',
+        parsed.amount > 0 ? formatMoneyByCurrency(parsed.amount, currency) : 'sin monto detectado',
+        parsed.account ? parsed.account.name : null,
+        parsed.category
+          ? `${parsed.category.name}${parsed.subcategory ? ` (${parsed.subcategory})` : ''}`
+          : null,
+      ].filter(Boolean);
+
+      setVoiceFeedbackText(
+        `Escuché: "${parsed.transcript}" → ${summaryParts.join(' • ')}. Verifica y toca Guardar.`
+      );
+    },
+    [data.accounts, data.categories, currency]
+  );
+
+  const handleOpenRepeatConfirm = () => {
+    if (!lastRepeatableTransaction || txSavingLocation) return;
+    setTxError('');
+    setShowRepeatConfirmBox((prev) => !prev);
+  };
+
+  const handleConfirmRepeatLastTransaction = () => {
     if (!lastRepeatableTransaction || txSavingLocation) return;
     setTxError('');
     const amt = Number(lastRepeatableTransaction.amount) || 0;
@@ -1689,19 +1883,26 @@ export default function App() {
 
   const handleToggleVoiceCommand = () => {
     if (isListeningVoice) {
+      if (voiceTranscriptBufferRef.current.trim()) {
+        applyParsedVoicePhrase(voiceTranscriptBufferRef.current.trim());
+      }
       stopVoiceListening();
       return;
     }
 
     setTxError('');
+    setShowRepeatConfirmBox(false);
+    voiceTranscriptBufferRef.current = '';
+
     const SpeechRec =
       typeof window !== 'undefined'
         ? window.SpeechRecognition || window.webkitSpeechRecognition
         : null;
 
     if (!SpeechRec) {
+      setShowVoiceFallbackInput(true);
       setVoiceFeedbackText(
-        'Tu navegador no soporta dictado por voz directo. Prueba en Chrome o usa el teclado con micrófono.'
+        'En este modo de Safari el micrófono web directo no está habilitado. Toca el cuadro de abajo y usa el micrófono del teclado de tu iPhone:'
       );
       return;
     }
@@ -1709,53 +1910,62 @@ export default function App() {
     try {
       const recognition = new SpeechRec();
       recognition.lang = 'es-CO';
-      recognition.interimResults = false;
+      recognition.continuous = false;
+      recognition.interimResults = true;
       recognition.maxAlternatives = 1;
       voiceRecognitionRef.current = recognition;
 
       setIsListeningVoice(true);
-      setVoiceFeedbackText('Escuchando... Di por ejemplo: "Gasté 25 mil en Nequi de gasolina"');
+      setShowVoiceFallbackInput(false);
+      setVoiceFeedbackText('Escuchando... Habla ahora (ej: "Gané 20.000 pesos por una carrera en inDrive y me pagaron en Bancolombia")');
 
       recognition.onresult = (event) => {
-        const spoken = event.results?.[0]?.[0]?.transcript || '';
-        const parsed = parseVoiceTransactionCommand(spoken, data.accounts, data.categories);
-        if (parsed) {
-          setTxType(parsed.type);
-          if (parsed.amount > 0) {
-            setTxAmount(Number(parsed.amount).toLocaleString('es-CO'));
+        let fullTranscript = '';
+        let hasFinal = false;
+        for (let i = 0; i < event.results.length; i += 1) {
+          fullTranscript += event.results[i][0]?.transcript || '';
+          if (event.results[i].isFinal) hasFinal = true;
+        }
+        const cleaned = fullTranscript.trim();
+        if (cleaned) {
+          voiceTranscriptBufferRef.current = cleaned;
+          setVoiceFeedbackText(`Escuchando: "${cleaned}"`);
+          if (hasFinal) {
+            applyParsedVoicePhrase(cleaned);
           }
-          if (parsed.account) {
-            setTxAccount(parsed.account.id);
-          }
-          if (parsed.category) {
-            setTxCategoryId(parsed.category.id);
-            setTxCategoryName(parsed.category.name);
-            setTxCategoryIcon(parsed.category.icon || 'none');
-            setTxSubcategoryName(parsed.subcategory || '');
-          }
-          setTxNote(parsed.transcript);
+        }
+      };
+
+      recognition.onerror = (err) => {
+        const errCode = err?.error || '';
+        if (voiceTranscriptBufferRef.current.trim()) {
+          applyParsedVoicePhrase(voiceTranscriptBufferRef.current.trim());
+          setIsListeningVoice(false);
+          voiceRecognitionRef.current = null;
+          return;
+        }
+        setShowVoiceFallbackInput(true);
+        if (errCode === 'not-allowed' || errCode === 'service-not-allowed') {
           setVoiceFeedbackText(
-            `Escuché: "${parsed.transcript}" — Revisa los campos rellenados y toca Guardar.`
+            'Safari bloqueó el micrófono directo. Usa el cuadro de abajo con el micrófono de tu teclado iPhone:'
+          );
+        } else if (errCode === 'no-speech') {
+          setVoiceFeedbackText(
+            'No se detectó voz. Intenta de nuevo o dicta usando el micrófono del teclado abajo:'
+          );
+        } else {
+          setVoiceFeedbackText(
+            'Safari no completó el audio directo. Usa el micrófono de tu teclado en el cuadro de abajo:'
           );
         }
         setIsListeningVoice(false);
         voiceRecognitionRef.current = null;
       };
 
-      recognition.onerror = (err) => {
-        const errCode = err?.error || '';
-        if (errCode === 'not-allowed') {
-          setVoiceFeedbackText('Permiso de micrófono denegado. Actívalo en el navegador para usar voz.');
-        } else if (errCode === 'no-speech') {
-          setVoiceFeedbackText('No se escuchó voz. Toca el micrófono e inténtalo de nuevo.');
-        } else {
-          setVoiceFeedbackText('No se pudo completar el comando de voz. Intenta de nuevo.');
-        }
-        setIsListeningVoice(false);
-        voiceRecognitionRef.current = null;
-      };
-
       recognition.onend = () => {
+        if (voiceTranscriptBufferRef.current.trim()) {
+          applyParsedVoicePhrase(voiceTranscriptBufferRef.current.trim());
+        }
         setIsListeningVoice(false);
         voiceRecognitionRef.current = null;
       };
@@ -1763,7 +1973,10 @@ export default function App() {
       recognition.start();
     } catch {
       setIsListeningVoice(false);
-      setVoiceFeedbackText('No se pudo iniciar el micrófono en este dispositivo.');
+      setShowVoiceFallbackInput(true);
+      setVoiceFeedbackText(
+        'Safari no permitió iniciar el micrófono directo. Toca el cuadro de abajo y dicta con el micrófono del teclado:'
+      );
     }
   };
 
@@ -7410,15 +7623,44 @@ endstream`;
               </button>
             </div>
 
-            {/* Atajos rápidos: Comando de voz y Repetir último movimiento al instante */}
+            {/* Atajos rápidos: Repetir último a la izquierda y Por voz a la derecha */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: lastRepeatableTransaction ? '1fr 1.25fr' : '1fr',
+                  gridTemplateColumns: lastRepeatableTransaction ? '1.25fr 1fr' : '1fr',
                   gap: '7px',
                 }}
               >
+                {lastRepeatableTransaction && (
+                  <button
+                    type="button"
+                    onClick={handleOpenRepeatConfirm}
+                    title="Ver resumen del último movimiento para repetirlo"
+                    style={{
+                      padding: '9px 10px',
+                      borderRadius: '11px',
+                      border: `1.5px solid ${
+                        lastRepeatableTransaction.type === 'ingreso' ? theme.success : theme.warning
+                      }`,
+                      backgroundColor:
+                        lastRepeatableTransaction.type === 'ingreso' ? theme.successBg : theme.warningBg,
+                      color:
+                        lastRepeatableTransaction.type === 'ingreso' ? theme.success : theme.warning,
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    ↻ Repetir último ({lastRepeatableTransaction.type === 'ingreso' ? '+' : '-'}
+                    {formatMoneyByCurrency(lastRepeatableTransaction.amount, currency)})
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={handleToggleVoiceCommand}
@@ -7443,39 +7685,83 @@ endstream`;
                     <line x1="12" y1="19" x2="12" y2="23" />
                     <line x1="8" y1="23" x2="16" y2="23" />
                   </svg>
-                  <span>{isListeningVoice ? 'Detener voz' : 'Por voz'}</span>
+                  <span>{isListeningVoice ? 'Listo / Parar' : 'Por voz'}</span>
                 </button>
+              </div>
 
-                {lastRepeatableTransaction && (
-                  <button
-                    type="button"
-                    onClick={handleRepeatLastTransactionInstant}
-                    title="Registrar exactamente el último movimiento de una"
+              {/* Vista previa y confirmación de Repetir último */}
+              {showRepeatConfirmBox && lastRepeatableTransaction && (() => {
+                const previewAcc =
+                  data.accounts.find((a) => a.id === lastRepeatableTransaction.accountId) ||
+                  data.accounts[0];
+                const isInc = lastRepeatableTransaction.type === 'ingreso';
+                return (
+                  <div
+                    className="ios-screen-enter"
                     style={{
-                      padding: '9px 10px',
-                      borderRadius: '11px',
-                      border: `1.5px solid ${
-                        lastRepeatableTransaction.type === 'ingreso' ? theme.success : theme.warning
-                      }`,
-                      backgroundColor:
-                        lastRepeatableTransaction.type === 'ingreso' ? theme.successBg : theme.warningBg,
-                      color:
-                        lastRepeatableTransaction.type === 'ingreso' ? theme.success : theme.warning,
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      backgroundColor: theme.cardSubtle,
+                      border: `1.5px solid ${isInc ? theme.success : theme.warning}`,
+                      borderRadius: '12px',
+                      padding: '11px 12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '7px',
                     }}
                   >
-                    ↻ Repetir último ({lastRepeatableTransaction.type === 'ingreso' ? '+' : '-'}
-                    {formatMoneyByCurrency(lastRepeatableTransaction.amount, currency)} •{' '}
-                    {lastRepeatableTransaction.subcategoryName || lastRepeatableTransaction.categoryName})
-                  </button>
-                )}
-              </div>
+                    <div style={{ fontSize: '12px', fontWeight: 800, color: isInc ? theme.success : theme.warning }}>
+                      Repetir último movimiento
+                    </div>
+                    <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                      • Tipo: <strong style={{ color: isInc ? theme.success : theme.danger }}>{isInc ? 'Ingreso' : 'Gasto'}</strong><br />
+                      • Valor: <strong style={{ color: theme.textPrimary }}>{formatMoneyByCurrency(lastRepeatableTransaction.amount, currency)}</strong><br />
+                      • Cuenta: <strong style={{ color: theme.textPrimary }}>{previewAcc?.name || lastRepeatableTransaction.accountName}</strong><br />
+                      • Categoría: <strong style={{ color: theme.textPrimary }}>
+                        {lastRepeatableTransaction.categoryName}
+                        {lastRepeatableTransaction.subcategoryName ? ` (${lastRepeatableTransaction.subcategoryName})` : ''}
+                      </strong>
+                      {lastRepeatableTransaction.note ? (
+                        <>
+                          <br />• Nota: <strong style={{ color: theme.textPrimary }}>{lastRepeatableTransaction.note}</strong>
+                        </>
+                      ) : null}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: '7px', marginTop: '2px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowRepeatConfirmBox(false)}
+                        style={{
+                          padding: '8px',
+                          borderRadius: '9px',
+                          border: `1px solid ${theme.border}`,
+                          backgroundColor: theme.inputBg,
+                          color: theme.textSecondary,
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConfirmRepeatLastTransaction}
+                        style={{
+                          padding: '8px',
+                          borderRadius: '9px',
+                          border: 'none',
+                          backgroundColor: theme.accentBlue,
+                          color: '#FFFFFF',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Confirmar y guardar
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {voiceFeedbackText && (
                 <div
@@ -7491,6 +7777,45 @@ endstream`;
                   }}
                 >
                   {voiceFeedbackText}
+                </div>
+              )}
+
+              {showVoiceFallbackInput && (
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    placeholder='Dicta aquí con el micrófono del teclado...'
+                    value={voiceFallbackDraft}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setVoiceFallbackDraft(val);
+                      if (val.trim().length >= 4) {
+                        applyParsedVoicePhrase(val);
+                      }
+                    }}
+                    style={{ ...baseInputStyle, fontSize: '12px', padding: '8px 10px', flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (voiceFallbackDraft.trim()) {
+                        applyParsedVoicePhrase(voiceFallbackDraft);
+                      }
+                    }}
+                    style={{
+                      padding: '8px 11px',
+                      borderRadius: '9px',
+                      border: 'none',
+                      backgroundColor: theme.accentBlue,
+                      color: '#FFFFFF',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Aplicar
+                  </button>
                 </div>
               )}
             </div>
